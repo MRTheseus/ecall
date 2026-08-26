@@ -81,6 +81,7 @@ type Config struct {
 	Web      WebConfig      `mapstructure:"web"`
 	Proxy    ProxyConfig    `mapstructure:"proxy"`
 	VoWiFi   VoWiFiConfig   `mapstructure:"vowifi"`
+	Security SecurityConfig `mapstructure:"security"`
 }
 
 // ProxyConfig 定义代理服务配置
@@ -111,6 +112,18 @@ type ProxyInstance struct {
 type WebConfig struct {
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
+}
+
+type SecurityConfig struct {
+	RateLimit      RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
+	AntiIPSpoofing bool            `mapstructure:"anti_ip_spoofing" json:"anti_ip_spoofing"`
+	TrustedProxies []string        `mapstructure:"trusted_proxies" json:"trusted_proxies"`
+}
+
+type RateLimitConfig struct {
+	Enabled       bool `mapstructure:"enabled" json:"enabled"`
+	MaxAttempts   int  `mapstructure:"max_attempts" json:"max_attempts"`
+	WindowSeconds int  `mapstructure:"window_seconds" json:"window_seconds"`
 }
 
 type ServerConfig struct {
@@ -261,6 +274,10 @@ func Load(path string) (*Config, error) {
 	viper.SetDefault("vowifi.enabled", false)
 	viper.SetDefault("vowifi.mode", "vowifi")
 	viper.SetDefault("imscore.use_sipgo_udp", false)
+	viper.SetDefault("security.rate_limit.enabled", true)
+	viper.SetDefault("security.rate_limit.max_attempts", 10)
+	viper.SetDefault("security.rate_limit.window_seconds", 120)
+	viper.SetDefault("security.anti_ip_spoofing", true)
 
 	// 环境变量覆盖支持 (例如 PROXY_DEVICES_0_APN)
 	viper.SetEnvPrefix("PROXY")
@@ -274,6 +291,14 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	// 兼容旧版或空 security 配置：未配置时提供默认保护
+	if cfg.Security.RateLimit.MaxAttempts <= 0 {
+		cfg.Security.RateLimit.MaxAttempts = 10
+	}
+	if cfg.Security.RateLimit.WindowSeconds <= 0 {
+		cfg.Security.RateLimit.WindowSeconds = 120
 	}
 
 	// 兼容旧版单值配置: feishu.chat_id

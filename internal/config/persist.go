@@ -131,3 +131,44 @@ func UpdateWebCredentialsInFile(path string, username, password string) error {
 	}
 	return nil
 }
+
+// UpdateSecurityInFile 更新配置文件中的安全策略配置
+func UpdateSecurityInFile(path string, security SecurityConfig) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	root := make(map[string]any)
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	root["security"] = map[string]any{
+		"rate_limit": map[string]any{
+			"enabled":        security.RateLimit.Enabled,
+			"max_attempts":   security.RateLimit.MaxAttempts,
+			"window_seconds": security.RateLimit.WindowSeconds,
+		},
+		"anti_ip_spoofing": security.AntiIPSpoofing,
+		"trusted_proxies":  security.TrustedProxies,
+	}
+
+	out, err := yaml.Marshal(root)
+	if err != nil {
+		return fmt.Errorf("序列化配置文件失败: %w", err)
+	}
+
+	tmp := path + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("创建配置目录失败: %w", err)
+	}
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		return fmt.Errorf("写入临时配置文件失败: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("替换配置文件失败: %w", err)
+	}
+	return nil
+}
+

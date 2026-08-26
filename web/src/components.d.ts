@@ -61,6 +61,7 @@ declare module 'vue' {
     EsimCardPolicyInline: typeof import('./components/EsimCardPolicyInline.vue')['default']
     FieldRow: typeof import('./components/FieldRow.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
+    IncomingCallModal: typeof import('./components/IncomingCallModal.vue')['default']
     ListSkeleton: typeof import('./components/ListSkeleton.vue')['default']
     LoadingScreen: typeof import('./components/LoadingScreen.vue')['default']
     OperatorSelectionDialog: typeof import('./components/OperatorSelectionDialog.vue')['default']
@@ -71,6 +72,7 @@ declare module 'vue' {
     StatusLight: typeof import('./components/StatusLight.vue')['default']
     SwitchDark: typeof import('./components/SwitchDark.vue')['default']
     TrafficAnalysisPanel: typeof import('./components/TrafficAnalysisPanel.vue')['default']
+    UserGuideDialog: typeof import('./components/UserGuideDialog.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

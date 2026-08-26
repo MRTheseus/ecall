@@ -12,11 +12,32 @@ import {
   Alert24Regular,
   Add20Regular,
   Delete20Regular,
-  DocumentText24Regular
+  DocumentText24Regular,
+  ShieldCheckmark24Regular,
+  LockClosed24Regular
 } from '@vicons/fluent'
 
 const settingsStore = useSettingsStore()
-const { systemInfo, loadingNotifications, savingNotifications, testingWebhook, testingBark, testingEmail, changingPassword, passwordForm, telegramForm, feishuForm, qqForm, webhookSettings, barkSettings, emailForm, pushplusForm } = storeToRefs(settingsStore)
+const { 
+  systemInfo, 
+  loadingNotifications, 
+  savingNotifications, 
+  loadingSecurity, 
+  savingSecurity, 
+  securityForm, 
+  testingWebhook, 
+  testingBark, 
+  testingEmail, 
+  changingPassword, 
+  passwordForm, 
+  telegramForm, 
+  feishuForm, 
+  qqForm, 
+  webhookSettings, 
+  barkSettings, 
+  emailForm, 
+  pushplusForm 
+} = storeToRefs(settingsStore)
 const activeNotifyTab = ref('telegram')
 
 
@@ -25,14 +46,14 @@ const hasValidWebhookURLs = computed(() => {
   if (!Array.isArray(webhookSettings.value.urls)) {
     return false
   }
-  return webhookSettings.value.urls.some((u) => String(u || '').trim().length > 0)
+  return webhookSettings.value.urls.some((u: string) => String(u || '').trim().length > 0)
 })
 
 const hasValidBarkURLs = computed(() => {
   if (!Array.isArray(barkSettings.value.urls)) {
     return false
   }
-  return barkSettings.value.urls.some((u) => String(u || '').trim().length > 0)
+  return barkSettings.value.urls.some((u: string) => String(u || '').trim().length > 0)
 })
 
 const hasValidEmailConfig = computed(() => {
@@ -304,7 +325,32 @@ async function doApplyUpdate() {
   }
 }
 
+async function loadSecurity() {
+  try {
+    const result = await settingsStore.fetchSecurity()
+    if (!result.ok) throw new Error(result.error.message || '安全配置加载失败')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '安全配置加载失败')
+  }
+}
+
+async function saveSecurity() {
+  try {
+    const result = await settingsStore.saveSecurityFromForm()
+    if (!result.ok) throw new Error(result.error.message || '安全配置保存失败')
+    ElMessage.success('安全与访问控制策略已保存并即时生效')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '安全配置保存失败')
+  }
+}
+
+function applyRateLimitPreset(attempts: number, windowSec: number) {
+  securityForm.value.rate_limit.max_attempts = attempts
+  securityForm.value.rate_limit.window_seconds = windowSec
+}
+
 onMounted(() => {
+  loadSecurity()
   loadNotifications()
   loadSystemInfo()
 })
@@ -318,40 +364,171 @@ onBeforeUnmount(() => {
     <PageHeader title="系统设置" subtitle="管理网关参数与运行信息" />
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <!-- Security Card -->
-      <div class="ui-card p-8 relative overflow-hidden group">
+      <!-- Security Card (全新设计的安全与防护面板) -->
+      <div class="ui-card p-6 sm:p-8 relative overflow-hidden group">
          <div class="absolute top-0 right-0 w-40 h-40 bg-indigo-500/5 rounded-bl-full -mr-10 -mt-10 transition-transform group-hover:scale-110"></div>
          
-         <div class="flex items-center gap-3 mb-6 relative z-10">
-            <div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-               <el-icon size="24"><Key24Regular /></el-icon>
+         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 relative z-10">
+            <div class="flex items-center gap-3">
+               <div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-xs">
+                  <el-icon size="24"><ShieldCheckmark24Regular /></el-icon>
+               </div>
+               <div>
+                  <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">安全与防护</h3>
+                  <p class="text-xs text-gray-500">密码凭证、登录限流与防伪造策略</p>
+               </div>
             </div>
-            <div>
-               <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">安全</h3>
-               <p class="text-xs text-gray-500">更新访问凭证</p>
-            </div>
+            <el-button 
+              type="primary" 
+              size="small"
+              :loading="savingSecurity" 
+              :disabled="loadingSecurity" 
+              @click="saveSecurity" 
+              class="!border-0 self-start sm:self-auto"
+            >
+              <el-icon><Save24Regular /></el-icon>
+              保存防护策略
+            </el-button>
          </div>
 
-         <div class="space-y-4 relative z-10">
-             <div class="space-y-1">
-                <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">当前密码</label>
-                <el-input v-model="passwordForm.old_password" type="password" show-password placeholder="••••••••" size="large" />
-             </div>
-             <div class="space-y-1">
-                <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">新密码</label>
-                <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="••••••••" size="large" />
-             </div>
-             <div class="space-y-1">
-                <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">确认新密码</label>
-                <el-input v-model="passwordForm.confirm_password" type="password" show-password placeholder="••••••••" size="large" />
-             </div>
-             
-             <div class="pt-4">
-                 <el-button type="primary" :loading="changingPassword" @click="changePassword" size="large" class="w-full !border-0">
-                   <el-icon><Save24Regular /></el-icon>
-                   更新凭证
-                 </el-button>
-             </div>
+         <div class="space-y-5 relative z-10 text-sm">
+            <!-- 1. 登录频率限制与防爆破 -->
+            <div class="p-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-gray-800 dark:text-gray-200">登录防爆破限流</span>
+                  <el-tag size="small" :type="securityForm.rate_limit.enabled ? 'success' : 'info'" effect="plain">
+                    {{ securityForm.rate_limit.enabled ? '已启用' : '已停用' }}
+                  </el-tag>
+                </div>
+                <el-switch v-model="securityForm.rate_limit.enabled" active-color="#6366f1" />
+              </div>
+              
+              <div class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                在指定时间窗口内限制单 IP 最大登录失败尝试次数，超出后返回 429 锁定，有效防御字典攻击与暴力破解。
+              </div>
+
+              <!-- 参数配置项 (仅在启用时可调节) -->
+              <div v-if="securityForm.rate_limit.enabled" class="pt-2 border-t border-gray-200/50 dark:border-white/5 space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div class="space-y-1">
+                    <label class="text-xs font-semibold text-gray-600 dark:text-gray-300">时间窗口 (秒)</label>
+                    <el-input-number 
+                      v-model="securityForm.rate_limit.window_seconds" 
+                      :min="10" 
+                      :max="3600" 
+                      :step="10"
+                      class="!w-full" 
+                      controls-position="right"
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <label class="text-xs font-semibold text-gray-600 dark:text-gray-300">最大尝试次数</label>
+                    <el-input-number 
+                      v-model="securityForm.rate_limit.max_attempts" 
+                      :min="1" 
+                      :max="100" 
+                      :step="1"
+                      class="!w-full" 
+                      controls-position="right"
+                    />
+                  </div>
+                </div>
+
+                <!-- 快捷预设 -->
+                <div class="flex items-center gap-1.5 pt-1">
+                  <span class="text-[11px] text-gray-400">快速预设:</span>
+                  <button 
+                    type="button" 
+                    @click="applyRateLimitPreset(10, 120)" 
+                    class="px-2 py-0.5 rounded text-[11px] bg-gray-200/70 hover:bg-indigo-100 hover:text-indigo-600 dark:bg-white/10 dark:hover:bg-indigo-500/20 text-gray-600 dark:text-gray-300 transition-colors cursor-pointer"
+                  >
+                    标准 (2分/10次)
+                  </button>
+                  <button 
+                    type="button" 
+                    @click="applyRateLimitPreset(5, 300)" 
+                    class="px-2 py-0.5 rounded text-[11px] bg-gray-200/70 hover:bg-indigo-100 hover:text-indigo-600 dark:bg-white/10 dark:hover:bg-indigo-500/20 text-gray-600 dark:text-gray-300 transition-colors cursor-pointer"
+                  >
+                    严格 (5分/5次)
+                  </button>
+                  <button 
+                    type="button" 
+                    @click="applyRateLimitPreset(20, 60)" 
+                    class="px-2 py-0.5 rounded text-[11px] bg-gray-200/70 hover:bg-indigo-100 hover:text-indigo-600 dark:bg-white/10 dark:hover:bg-indigo-500/20 text-gray-600 dark:text-gray-300 transition-colors cursor-pointer"
+                  >
+                    宽松 (1分/20次)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. 反向代理 IP 伪造防御 -->
+            <div class="p-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-gray-800 dark:text-gray-200">防反代 IP 伪造 (Anti-IP Spoofing)</span>
+                  <el-tag size="small" :type="securityForm.anti_ip_spoofing ? 'success' : 'warning'" effect="plain">
+                    {{ securityForm.anti_ip_spoofing ? '严格模式' : '兼容模式' }}
+                  </el-tag>
+                </div>
+                <el-switch v-model="securityForm.anti_ip_spoofing" active-color="#6366f1" />
+              </div>
+              
+              <div class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                <span v-if="securityForm.anti_ip_spoofing" class="text-emerald-600 dark:text-emerald-400 font-medium">
+                  🛡️ 严格防护已开启：强制忽略不可信的 X-Forwarded-For 伪造头，严格基于底层 TCP 真实连接 IP 限流，防止黑客伪造 IP 绕过封禁。
+                </span>
+                <span v-else class="text-amber-600 dark:text-amber-400 font-medium">
+                  ⚠️ 兼容模式已开启：允许解析反向代理（Nginx/Caddy/CDN）传递的 X-Forwarded-For 客户端真实 IP。若暴露在公网请配置受信任代理 CIDR。
+                </span>
+              </div>
+
+              <!-- 受信任代理 IP 配置 (可选) -->
+              <div class="pt-2 border-t border-gray-200/50 dark:border-white/5 space-y-1">
+                <label class="text-xs font-semibold text-gray-600 dark:text-gray-300">
+                  受信任代理 IP / CIDR 列表 (可选，逗号分隔)
+                </label>
+                <el-input 
+                  v-model="securityForm.trusted_proxies" 
+                  placeholder="例如: 127.0.0.1, 10.0.0.0/8, 172.16.0.0/12" 
+                  size="small"
+                  clearable
+                />
+              </div>
+            </div>
+
+            <!-- 3. 管理员凭证与修改密码 -->
+            <div class="p-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 space-y-3">
+              <div class="flex items-center gap-2 mb-1">
+                <el-icon class="text-indigo-500"><Key24Regular /></el-icon>
+                <span class="font-bold text-gray-800 dark:text-gray-200">修改登录密码</span>
+              </div>
+
+              <div class="space-y-2.5">
+                 <div class="space-y-1">
+                    <label class="text-xs font-semibold text-gray-500">当前密码</label>
+                    <el-input v-model="passwordForm.old_password" type="password" show-password placeholder="请输入当前密码" size="default" />
+                 </div>
+                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                   <div class="space-y-1">
+                      <label class="text-xs font-semibold text-gray-500">新密码</label>
+                      <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="请输入新密码" size="default" />
+                   </div>
+                   <div class="space-y-1">
+                      <label class="text-xs font-semibold text-gray-500">确认新密码</label>
+                      <el-input v-model="passwordForm.confirm_password" type="password" show-password placeholder="再次确认新密码" size="default" />
+                   </div>
+                 </div>
+                 
+                 <div class="pt-2">
+                     <el-button type="primary" plain :loading="changingPassword" @click="changePassword" size="default" class="w-full">
+                       <el-icon><LockClosed24Regular /></el-icon>
+                       更新登录密码
+                     </el-button>
+                 </div>
+              </div>
+            </div>
          </div>
       </div>
 

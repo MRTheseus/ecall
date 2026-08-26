@@ -6,6 +6,7 @@ import { Expand, Fold } from '@element-plus/icons-vue'
 import LoadingScreen from '../components/LoadingScreen.vue'
 import ErrorBoundary from '../components/ErrorBoundary.vue'
 import SwitchDark from '../components/SwitchDark.vue'
+import UserGuideDialog from '../components/UserGuideDialog.vue'
 import { debugCollector } from '../debug/collector'
 import {
   Mail24Regular,
@@ -13,9 +14,12 @@ import {
   SignOut24Regular,
   Board24Regular,
   Phone24Regular,
+  Call24Regular,
   Globe24Regular,
-  DocumentText24Regular
+  DocumentText24Regular,
+  QuestionCircle24Regular
 } from '@vicons/fluent'
+import IncomingCallModal from '../components/IncomingCallModal.vue'
 
 defineProps({
   isDark: {
@@ -33,11 +37,13 @@ const collapsed = ref(false)
 const isMobile = ref(false)
 const drawerOpen = ref(false)
 const debugOpen = ref(false)
+const guideOpen = ref(false)
 const DebugPanel = defineAsyncComponent(() => import('../components/DebugPanel.vue'))
 
 const menuItems = [
   { index: '/', label: '仪表盘', icon: Board24Regular },
   { index: '/devices', label: '设备管理', icon: Phone24Regular },
+  { index: '/voice', label: '电话拨号', icon: Call24Regular },
   { index: '/proxy', label: '代理管理', icon: Globe24Regular },
   { index: '/sms', label: '短信中心', icon: Mail24Regular },
   { index: '/logs', label: '实时日志', icon: DocumentText24Regular },
@@ -215,15 +221,28 @@ const activePath = computed(() => route.path)
           </el-button>
         </div>
 
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 sm:gap-2.5">
+          <el-tooltip content="使用指南与操作手册" placement="bottom" :show-after="200">
+            <button
+              type="button"
+              @click="guideOpen = true"
+              aria-label="使用指南与操作手册"
+              class="w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 dark:text-gray-300 dark:hover:text-white dark:bg-white/10 dark:hover:bg-white/15 border border-gray-200/80 dark:border-white/10 focus:outline-none active:scale-95 cursor-pointer shadow-sm"
+            >
+              <el-icon :size="17"><QuestionCircle24Regular /></el-icon>
+            </button>
+          </el-tooltip>
+
           <SwitchDark :is-dark="isDark" @toggle="(e) => emit('toggle-theme', e)" />
 
-          <div class="hidden sm:flex items-center justify-center w-7 h-7 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 shadow-sm">
-            <span class="relative flex h-2 w-2">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-          </div>
+          <el-tooltip content="系统运行正常" placement="bottom" :show-after="300">
+            <div class="hidden sm:flex items-center justify-center w-8 h-8 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200/60 dark:border-emerald-500/20 shadow-xs">
+              <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            </div>
+          </el-tooltip>
         </div>
       </el-header>
 
@@ -240,6 +259,8 @@ const activePath = computed(() => route.path)
     </el-container>
 
     <DebugPanel v-model="debugOpen" />
+    <IncomingCallModal />
+    <UserGuideDialog v-model="guideOpen" />
   </el-container>
 </template>
 

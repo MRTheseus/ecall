@@ -28,6 +28,7 @@ import (
 	"github.com/iniwex5/vohive/internal/proxy/server"
 	proxytraffic "github.com/iniwex5/vohive/internal/proxy/traffic"
 	vwebsheet "github.com/iniwex5/vohive/internal/websheet"
+	"github.com/iniwex5/vohive/internal/voicecall"
 	"github.com/iniwex5/vohive/pkg/smscodec"
 	"github.com/iniwex5/vowifi-go/runtimehost/voicehost"
 
@@ -76,13 +77,16 @@ type Server struct {
 	trafficRT   realtimeTrafficSubscriber
 	proxyRepo   repo.ProxyInstanceRepository
 	proxySyncMu sync.Mutex
-	voiceGW     *voicehost.Gateway
-	notifyMgr   *notify.Manager
-	websheets   *vwebsheet.Broker
+	voiceGW      *voicehost.Gateway
+	voiceCallMgr *voicecall.Manager
+	notifyMgr    *notify.Manager
+	websheets    *vwebsheet.Broker
 
 	httpSrvMu sync.Mutex
 	httpSrv   *http.Server
+	router    *gin.Engine
 
+	secMu         sync.RWMutex
 	loginMu       sync.Mutex
 	loginAttempts map[string]loginAttempt
 
@@ -114,6 +118,7 @@ func New(cfg *config.Config, pool *device.Pool, fs http.FileSystem, proxyMgr *se
 		configPath:    configPath,
 		proxyMgr:      proxyMgr,
 		voiceGW:       voiceGW,
+		voiceCallMgr:  voicecall.NewManager(pool),
 		notifyMgr:     notifyMgr,
 		proxyRepo:     repo.NewDBRepo(),
 		websheets:     vwebsheet.New(vwebsheet.Config{BasePath: "/api/websheets"}),
@@ -169,12 +174,71 @@ func (s *Server) issueSessionToken() (string, time.Time, error) {
 
 // pruneExpiredSessionsLocked is removed.
 
+func (s *Server) getSecurityConfig() config.SecurityConfig {
+	s.secMu.RLock()
+	defer s.secMu.RUnlock()
+	if s.fullCfg != nil {
+		sec := s.fullCfg.Security
+		if sec.RateLimit.MaxAttempts <= 0 {
+			sec.RateLimit.MaxAttempts = 10
+		}
+		if sec.RateLimit.WindowSeconds <= 0 {
+			sec.RateLimit.WindowSeconds = 120
+		}
+		return sec
+	}
+	return config.SecurityConfig{
+		RateLimit: config.RateLimitConfig{
+			Enabled:       true,
+			MaxAttempts:   10,
+			WindowSeconds: 120,
+		},
+		AntiIPSpoofing: true,
+	}
+}
+
+func (s *Server) applySecurityConfig(sec config.SecurityConfig) {
+	s.secMu.Lock()
+	if s.fullCfg != nil {
+		s.fullCfg.Security = sec
+	}
+	router := s.router
+	s.secMu.Unlock()
+
+	if router != nil {
+		if sec.AntiIPSpoofing {
+			if len(sec.TrustedProxies) > 0 {
+				_ = router.SetTrustedProxies(sec.TrustedProxies)
+			} else {
+				_ = router.SetTrustedProxies(nil)
+			}
+		} else {
+			if len(sec.TrustedProxies) > 0 {
+				_ = router.SetTrustedProxies(sec.TrustedProxies)
+			} else {
+				_ = router.SetTrustedProxies([]string{"0.0.0.0/0", "::/0"})
+			}
+		}
+	}
+}
+
 func (s *Server) allowLoginAttempt(ip string, now time.Time) bool {
+	sec := s.getSecurityConfig()
+	if !sec.RateLimit.Enabled {
+		return true
+	}
+
 	if ip == "" {
 		ip = "unknown"
 	}
-	window := 2 * time.Minute
-	limit := 10
+	window := time.Duration(sec.RateLimit.WindowSeconds) * time.Second
+	if window <= 0 {
+		window = 2 * time.Minute
+	}
+	limit := sec.RateLimit.MaxAttempts
+	if limit <= 0 {
+		limit = 10
+	}
 
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
@@ -194,11 +258,29 @@ func (s *Server) allowLoginAttempt(ip string, now time.Time) bool {
 
 func (s *Server) newRouter() *gin.Engine {
 	r := gin.Default()
-	// 不信任任何反向代理传来的 X-Forwarded-For / X-Real-IP，
-	// 否则 c.ClientIP()（登录限流、审计日志都依赖它）可被客户端任意伪造。
-	// 如果部署在反代之后，应在此显式列出反代的真实 IP/CIDR，而不是信任所有来源。
-	if err := r.SetTrustedProxies(nil); err != nil {
-		logger.Error("设置 Gin 信任代理列表失败", "err", err)
+	s.router = r
+
+	sec := s.getSecurityConfig()
+	if sec.AntiIPSpoofing {
+		if len(sec.TrustedProxies) > 0 {
+			if err := r.SetTrustedProxies(sec.TrustedProxies); err != nil {
+				logger.Error("设置 Gin 信任代理列表失败", "err", err)
+			}
+		} else {
+			if err := r.SetTrustedProxies(nil); err != nil {
+				logger.Error("设置 Gin 信任代理列表失败", "err", err)
+			}
+		}
+	} else {
+		if len(sec.TrustedProxies) > 0 {
+			if err := r.SetTrustedProxies(sec.TrustedProxies); err != nil {
+				logger.Error("设置 Gin 信任代理列表失败", "err", err)
+			}
+		} else {
+			if err := r.SetTrustedProxies([]string{"0.0.0.0/0", "::/0"}); err != nil {
+				logger.Error("设置 Gin 信任代理列表失败", "err", err)
+			}
+		}
 	}
 	r.Use(s.requestIDMiddleware())
 
@@ -271,16 +353,28 @@ func (s *Server) newRouter() *gin.Engine {
 		api.DELETE("/sms/messages/:id", s.handleDeleteSMSMessage) // 删除单条历史短信
 		api.DELETE("/sms/thread", s.handleDeleteSMSThread)        // 删除指定历史短信会话
 
+		// ===== 语音呼叫 & WebRTC =====
+		api.GET("/voice/status", s.handleVoiceStatus)
+		api.POST("/voice/dial", s.handleVoiceDial)
+		api.POST("/voice/answer", s.handleVoiceAnswer)
+		api.POST("/voice/hangup", s.handleVoiceHangup)
+		api.POST("/voice/dtmf", s.handleVoiceDTMF)
+		api.POST("/voice/webrtc/offer", s.handleVoiceWebRTCOffer)
+		api.POST("/voice/webrtc/candidate", s.handleVoiceWebRTCCandidate)
+		api.GET("/voice/ws", s.handleVoiceWS)
+
 		// ===== 系统设置 =====
 		api.GET("/settings/notifications", s.handleGetNotificationSettings)    // 获取通知设置
 		api.PUT("/settings/notifications", s.handleUpdateNotificationSettings) // 更新通知设置
 		api.POST("/settings/notifications/webhook/test", s.handleTestWebhookNotification)
 		api.POST("/settings/notifications/bark/test", s.handleTestBarkNotification)
 		api.POST("/settings/notifications/email/test", s.handleTestEmailNotification)
-		api.POST("/settings/password", s.handleChangePassword) // 修改登录密码
-		api.GET("/system/info", s.handleSystemInfo)            // 获取系统运行与版本信息
-		api.GET("/system/update/check", s.handleCheckUpdate)   // 检查系统更新
-		api.POST("/system/update/apply", s.handleApplyUpdate)  // 应用系统更新
+		api.GET("/settings/security", s.handleGetSecuritySettings)             // 获取安全防护与限流设置
+		api.PUT("/settings/security", s.handleUpdateSecuritySettings)          // 更新安全防护与限流设置
+		api.POST("/settings/password", s.handleChangePassword)                 // 修改登录密码
+		api.GET("/system/info", s.handleSystemInfo)                            // 获取系统运行与版本信息
+		api.GET("/system/update/check", s.handleCheckUpdate)                   // 检查系统更新
+		api.POST("/system/update/apply", s.handleApplyUpdate)                  // 应用系统更新
 
 		api.GET("/devices", s.handleDeviceMgmtList)                                            // 获取设备列表（管理页用）
 		api.POST("/devices", s.handleDeviceMgmtAddDevice)                                      // 添加新设备
