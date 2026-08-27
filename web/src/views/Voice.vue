@@ -79,11 +79,14 @@ const callStatusText = computed(() => {
     case 'dialing':
       return '正在呼叫...'
     case 'ringing':
-      return '正在振铃...'
+      return currentSession.value.direction === 'inbound' ? '来电振铃中...' : '对方正在响铃...'
     case 'active':
-      return '通话中'
+      return '正在通话'
     case 'terminated':
-      return '通话结束'
+      if (currentSession.value.hangup_reason === 'remote_canceled') return '对方已取消呼叫'
+      if (currentSession.value.hangup_reason === 'busy') return '对方拒接/占线'
+      if (currentSession.value.hangup_reason === 'no_answer') return '无人接听'
+      return '通话已结束'
     default:
       return ''
   }

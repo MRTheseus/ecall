@@ -1803,6 +1803,9 @@ func (s *Server) isSessionTokenValid(token string, now time.Time) bool {
 func (s *Server) requestSessionToken(c *gin.Context) string {
 	token := strings.TrimSpace(c.GetHeader("Authorization"))
 	if token == "" {
+		token = strings.TrimSpace(c.Query("token"))
+	}
+	if token == "" {
 		return ""
 	}
 	token = strings.TrimPrefix(token, "Bearer ")

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os/exec"
 	"sync"
 	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/pion/webrtc/v4/pkg/media/oggreader"
+	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
 // WebRTCGateway 管理与前端浏览器的 WebRTC 音频连接
@@ -22,6 +25,14 @@ type WebRTCGateway struct {
 	cancel       context.CancelFunc
 	onICEGather  func(candidate *webrtc.ICECandidate)
 	onDisconnect func()
+
+	// ffmpeg 转码进程
+	downEncoder  *exec.Cmd // PCM→Opus (下行: 模组声卡 → 浏览器)
+	upDecoder    *exec.Cmd // Opus→PCM (上行: 浏览器 → 模组声卡)
+	downOpusOut  io.ReadCloser
+	upPCMOut     io.ReadCloser
+	upOpusIn     io.WriteCloser
+	oggWriter    *oggwriter.OggWriter
 }
 
 func NewWebRTCGateway(bridge *AudioBridge) *WebRTCGateway {
@@ -42,8 +53,9 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 	if gw.peerConn != nil {
 		_ = gw.peerConn.Close()
 	}
+	gw.stopTranscoders()
 
-	gw.ctx, gw.cancel = context.WithCancel(ctx)
+	gw.ctx, gw.cancel = context.WithCancel(context.Background())
 
 	// 2. 创建 WebRTC 媒体引擎与 API
 	mediaEngine := &webrtc.MediaEngine{}
@@ -52,7 +64,6 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 	}
 
 	settingEngine := webrtc.SettingEngine{}
-	// 放行局域网与标准 ICE 候选
 	settingEngine.SetIncludeLoopbackCandidate(true)
 
 	api := webrtc.NewAPI(
@@ -78,7 +89,7 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 	}
 	gw.peerConn = pc
 
-	// 4. 创建下行发送给前端的 Audio Track (Opus 48000Hz Stereo/Mono)
+	// 4. 创建下行发送给前端的 Audio Track (Opus 48000Hz)
 	track, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio",
@@ -149,10 +160,145 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 		currentAnswer = &answer
 	}
 
-	// 10. 启动下行推流协程（从模组读取声音并推给前端）
+	// 10. 启动 ffmpeg 转码管道与下行推流协程
+	gw.startTranscoders()
 	go gw.startOutgoingAudioStream()
 
 	return currentAnswer.SDP, nil
+}
+
+// startTranscoders 启动 ffmpeg 转码进程
+func (gw *WebRTCGateway) startTranscoders() {
+	ctx := gw.ctx
+
+	// 下行编码器: PCM 8kHz S16_LE → Opus (读取 AudioBridge → ffmpeg → Opus 帧)
+	// ffmpeg 从 stdin 读取原始 PCM，输出 OGG/Opus 到 stdout
+	gw.downEncoder = exec.CommandContext(ctx, "ffmpeg",
+		"-hide_banner", "-loglevel", "error",
+		"-f", "s16le", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
+		"-c:a", "libopus", "-ar", "48000", "-ac", "1",
+		"-b:a", "24000",
+		"-application", "voip",
+		"-frame_duration", "20",
+		"-f", "opus", "pipe:1",
+	)
+	downIn, err := gw.downEncoder.StdinPipe()
+	if err != nil {
+		logger.Warn("创建下行编码器 stdin 管道失败", "err", err)
+		return
+	}
+	downOut, err := gw.downEncoder.StdoutPipe()
+	if err != nil {
+		logger.Warn("创建下行编码器 stdout 管道失败", "err", err)
+		return
+	}
+	if err := gw.downEncoder.Start(); err != nil {
+		logger.Warn("启动下行 ffmpeg 编码器失败", "err", err)
+		return
+	}
+	gw.downOpusOut = downOut
+	logger.Info("下行 ffmpeg Opus 编码器已启动", "pid", gw.downEncoder.Process.Pid)
+
+	// 启动后台协程: 从 AudioBridge 读取 PCM 并喂给 ffmpeg 编码器
+	go func() {
+		pcmBuf := make([]byte, 320) // 8kHz 16-bit 20ms = 320 bytes
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				n, err := gw.audioBridge.ReadPCM(pcmBuf)
+				if err != nil {
+					if err == io.EOF || ctx.Err() != nil {
+						return
+					}
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				if n > 0 {
+					_, writeErr := downIn.Write(pcmBuf[:n])
+					if writeErr != nil {
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	// 上行解码器: Opus → PCM 8kHz S16_LE (浏览器麦克风 Opus → ffmpeg → AudioBridge)
+	gw.upDecoder = exec.CommandContext(ctx, "ffmpeg",
+		"-hide_banner", "-loglevel", "error",
+		"-c:a", "libopus",
+		"-f", "ogg", "-i", "pipe:0",
+		"-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:1",
+	)
+	upIn, err := gw.upDecoder.StdinPipe()
+	if err != nil {
+		logger.Warn("创建上行解码器 stdin 管道失败", "err", err)
+		return
+	}
+	upOut, err := gw.upDecoder.StdoutPipe()
+	if err != nil {
+		logger.Warn("创建上行解码器 stdout 管道失败", "err", err)
+		return
+	}
+	if err := gw.upDecoder.Start(); err != nil {
+		logger.Warn("启动上行 ffmpeg 解码器失败", "err", err)
+		return
+	}
+	gw.upOpusIn = upIn
+	gw.upPCMOut = upOut
+	writer, err := oggwriter.NewWith(upIn, 48000, 1)
+	if err != nil {
+		logger.Warn("创建 oggwriter 失败", "err", err)
+	} else {
+		gw.oggWriter = writer
+	}
+	logger.Info("上行 ffmpeg Opus 解码器已启动", "pid", gw.upDecoder.Process.Pid)
+
+	// 启动后台协程: 从 ffmpeg 解码器读取 PCM 并写入 AudioBridge (模组声卡)
+	go func() {
+		pcmBuf := make([]byte, 320)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				n, err := upOut.Read(pcmBuf)
+				if err != nil {
+					return
+				}
+				if n > 0 {
+					_, _ = gw.audioBridge.WritePCM(pcmBuf[:n])
+				}
+			}
+		}
+	}()
+}
+
+// stopTranscoders 停止 ffmpeg 转码进程
+func (gw *WebRTCGateway) stopTranscoders() {
+	gw.oggWriter = nil
+	if gw.downOpusOut != nil {
+		_ = gw.downOpusOut.Close()
+		gw.downOpusOut = nil
+	}
+	if gw.upOpusIn != nil {
+		_ = gw.upOpusIn.Close()
+		gw.upOpusIn = nil
+	}
+	if gw.upPCMOut != nil {
+		_ = gw.upPCMOut.Close()
+		gw.upPCMOut = nil
+	}
+	if gw.downEncoder != nil && gw.downEncoder.Process != nil {
+		_ = gw.downEncoder.Process.Kill()
+		gw.downEncoder = nil
+	}
+	if gw.upDecoder != nil && gw.upDecoder.Process != nil {
+		_ = gw.upDecoder.Process.Kill()
+		gw.upDecoder = nil
+	}
 }
 
 // AddICECandidate 添加前端发来的 ICE 候选
@@ -167,7 +313,7 @@ func (gw *WebRTCGateway) AddICECandidate(candidate webrtc.ICECandidateInit) erro
 	return pc.AddICECandidate(candidate)
 }
 
-// handleIncomingAudio 处理浏览器发来的麦克风音频流
+// handleIncomingAudio 处理浏览器发来的麦克风音频流 (Opus RTP → oggwriter → ffmpeg → PCM → aplay)
 func (gw *WebRTCGateway) handleIncomingAudio(remoteTrack *webrtc.TrackRemote) {
 	for {
 		select {
@@ -182,43 +328,47 @@ func (gw *WebRTCGateway) handleIncomingAudio(remoteTrack *webrtc.TrackRemote) {
 				logger.Debug("读取上行 RTP 数据包失败", "err", err)
 				return
 			}
-			// 将上行数据写入 AudioBridge 传递给模组
-			if gw.audioBridge != nil && len(pkt.Payload) > 0 {
-				_, _ = gw.audioBridge.WritePCM(pkt.Payload)
+			gw.mu.Lock()
+			writer := gw.oggWriter
+			gw.mu.Unlock()
+			if writer != nil && len(pkt.Payload) > 0 {
+				_ = writer.WriteRTP(pkt)
 			}
 		}
 	}
 }
 
-// startOutgoingAudioStream 从模组读取下行音频并封装发送给浏览器
+// startOutgoingAudioStream 从 ffmpeg 编码器读取 OggOpus，解包出裸 Opus 帧并发送给浏览器
 func (gw *WebRTCGateway) startOutgoingAudioStream() {
-	if gw.audioBridge == nil || gw.audioTrack == nil {
+	if gw.downOpusOut == nil || gw.audioTrack == nil {
 		return
 	}
 
-	// 每 20ms 发送一个音频 Sample
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
+	ogg, _, err := oggreader.NewWith(gw.downOpusOut)
+	if err != nil {
+		logger.Warn("初始化 oggreader 失败", "err", err)
+		return
+	}
 
-	pcmBuf := make([]byte, 320) // 8000Hz 16-bit 20ms PCM 帧
 	for {
 		select {
 		case <-gw.ctx.Done():
 			return
-		case <-ticker.C:
-			n, err := gw.audioBridge.ReadPCM(pcmBuf)
-			if err != nil && err != io.EOF {
+		default:
+			pageData, _, err := ogg.ParseNextPage()
+			if err != nil {
+				if err == io.EOF || gw.ctx.Err() != nil {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			if len(pageData) == 0 {
 				continue
 			}
 
-			payload := pcmBuf[:n]
-			if n == 0 {
-				payload = make([]byte, 320) // 静音回填
-			}
-
-			// 写入 WebRTC 本地音轨
 			err = gw.audioTrack.WriteSample(media.Sample{
-				Data:     payload,
+				Data:     pageData,
 				Duration: 20 * time.Millisecond,
 			})
 			if err != nil && err != io.ErrClosedPipe {
@@ -236,6 +386,7 @@ func (gw *WebRTCGateway) Close() {
 	if gw.cancel != nil {
 		gw.cancel()
 	}
+	gw.stopTranscoders()
 	if gw.peerConn != nil {
 		_ = gw.peerConn.Close()
 		gw.peerConn = nil

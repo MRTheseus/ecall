@@ -2,11 +2,11 @@ package voicecall
 
 import (
 	"context"
+	"fmt"
 	"io"
-	"net"
-	"os"
+	"os/exec"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -25,73 +25,93 @@ type AudioSink interface {
 
 // AudioBridge 管理与底层模组的音频输入输出通道
 type AudioBridge struct {
-	mu           sync.Mutex
-	source       AudioSource
-	sink         AudioSink
-	isFallback   bool
-	pcmSocketURL string
+	mu          sync.Mutex
+	source      AudioSource
+	sink        AudioSink
+	recCmd      *exec.Cmd
+	playCmd     *exec.Cmd
+	alsaDevice  string
+	cancelFunc  context.CancelFunc
 }
 
 func NewAudioBridge(pcmSocketURL string) *AudioBridge {
 	return &AudioBridge{
-		pcmSocketURL: pcmSocketURL,
+		alsaDevice: "hw:0,0", // 默认大疆 4G 模组 USB-Audio 声卡
 	}
 }
 
-// Open 打开音频通路（优先尝试 Socket 或 ALSA 文件，失败则进入安全回退模式）
+// detectALSADevice 自动探测模组声卡号
+func detectALSADevice() string {
+	cmd := exec.Command("arecord", "-l")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "Baiwang") || strings.Contains(line, "EC25") || strings.Contains(line, "USB Audio") {
+				// 解析 card X
+				fields := strings.Fields(line)
+				for i, f := range fields {
+					if f == "card" && i+1 < len(fields) {
+						cardNum := strings.TrimRight(fields[i+1], ":")
+						devStr := fmt.Sprintf("hw:%s,0", cardNum)
+						logger.Info("检测到模组 ALSA 声卡设备", "device", devStr, "info", line)
+						return devStr
+					}
+				}
+			}
+		}
+	}
+	return "hw:0,0"
+}
+
+// Open 打开音频通路：启动 arecord 下行采集 与 aplay 上行放音
 func (ab *AudioBridge) Open(ctx context.Context) error {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	// 1. 如果配置了 PCM Socket 地址（如 127.0.0.1:9000），尝试 TCP 连接
-	if ab.pcmSocketURL != "" {
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", ab.pcmSocketURL)
-		if err == nil {
-			logger.Info("AudioBridge 已连接至 PCM Socket", "addr", ab.pcmSocketURL)
-			ab.source = conn
-			ab.sink = conn
-			ab.isFallback = false
-			return nil
-		}
-		logger.Warn("AudioBridge 连接 PCM Socket 失败，尝试本地声卡", "err", err)
+	ctx, cancel := context.WithCancel(ctx)
+	ab.cancelFunc = cancel
+
+	dev := detectALSADevice()
+	ab.alsaDevice = dev
+
+	logger.Info("AudioBridge 正在启动 ALSA 双向音频管道", "alsa_device", dev)
+
+	// 1. 启动 arecord 录音子进程 (模组 ➔ WebRTC 听筒)
+	recCmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw")
+	recStdout, err := recCmd.StdoutPipe()
+	if err != nil {
+		logger.Warn("创建 arecord 管道失败", "err", err)
+	} else if err := recCmd.Start(); err != nil {
+		logger.Warn("启动 arecord 录音进程失败", "err", err)
+	} else {
+		logger.Info("arecord 下行录音进程已就绪", "pid", recCmd.Process.Pid)
+		ab.recCmd = recCmd
+		ab.source = recStdout
 	}
 
-	// 2. 尝试打开 Linux ALSA 原始 PCM 设备文件节点（若存在）
-	alsaCapPaths := []string{"/dev/snd/pcmC1D0c", "/dev/snd/pcmC2D0c", "/dev/snd/pcmC0D0c"}
-	for _, p := range alsaCapPaths {
-		if f, err := os.OpenFile(p, os.O_RDWR, 0666); err == nil {
-			logger.Info("AudioBridge 打开 ALSA 设备成功", "path", p)
-			ab.source = f
-			ab.sink = f
-			ab.isFallback = false
-			return nil
-		}
+	// 2. 启动 aplay 放音子进程 (麦克风 ➔ 模组基带 ➔ 对方手机)
+	playCmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw")
+	playStdin, err := playCmd.StdinPipe()
+	if err != nil {
+		logger.Warn("创建 aplay 管道失败", "err", err)
+	} else if err := playCmd.Start(); err != nil {
+		logger.Warn("启动 aplay 放音进程失败", "err", err)
+	} else {
+		logger.Info("aplay 上行放音进程已就绪", "pid", playCmd.Process.Pid)
+		ab.playCmd = playCmd
+		ab.sink = playStdin
 	}
 
-	// 3. Fallback 安全模式：创建内存管道（静音/自环保活）
-	logger.Info("AudioBridge 进入 Fallback 虚拟音频流模式")
-	r, w := io.Pipe()
-	ab.source = r
-	ab.sink = w
-	ab.isFallback = true
-
-	// 启动后台静音/心跳帧发生器，避免 WebRTC 接收端超时无声
-	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond) // 20ms 一帧
-		defer ticker.Stop()
-		silenceFrame := make([]byte, 320) // 8000Hz 16-bit 20ms = 160 samples = 320 bytes
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if ab.isFallback && ab.sink != nil {
-					_, _ = ab.sink.Write(silenceFrame)
-				}
-			}
-		}
-	}()
+	// 如果声卡子进程启动失败，使用安全管道自环保活
+	if ab.source == nil {
+		r, _ := io.Pipe()
+		ab.source = r
+	}
+	if ab.sink == nil {
+		_, w := io.Pipe()
+		ab.sink = w
+	}
 
 	return nil
 }
@@ -108,7 +128,7 @@ func (ab *AudioBridge) ReadPCM(buf []byte) (int, error) {
 	return src.Read(buf)
 }
 
-// WritePCM 将 WebRTC 收到的麦克风 PCM 写入模组
+// WritePCM 将 WebRTC 收到的麦克风 PCM 写入模组声卡
 func (ab *AudioBridge) WritePCM(buf []byte) (int, error) {
 	ab.mu.Lock()
 	snk := ab.sink
@@ -120,10 +140,17 @@ func (ab *AudioBridge) WritePCM(buf []byte) (int, error) {
 	return snk.Write(buf)
 }
 
-// Close 关闭音频通道
+// Close 关闭音频通路与子进程
 func (ab *AudioBridge) Close() error {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
+
+	logger.Info("AudioBridge 正在关闭音频管道与 ALSA 进程")
+
+	if ab.cancelFunc != nil {
+		ab.cancelFunc()
+		ab.cancelFunc = nil
+	}
 
 	if ab.source != nil {
 		_ = ab.source.Close()
@@ -133,5 +160,15 @@ func (ab *AudioBridge) Close() error {
 		_ = ab.sink.Close()
 		ab.sink = nil
 	}
+
+	if ab.recCmd != nil && ab.recCmd.Process != nil {
+		_ = ab.recCmd.Process.Kill()
+		ab.recCmd = nil
+	}
+	if ab.playCmd != nil && ab.playCmd.Process != nil {
+		_ = ab.playCmd.Process.Kill()
+		ab.playCmd = nil
+	}
+
 	return nil
 }
