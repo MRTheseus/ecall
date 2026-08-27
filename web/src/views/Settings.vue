@@ -269,62 +269,6 @@ watch(() => emailForm.value.smtp_port, (newPort) => {
 
 
 
-import { systemService, type UpdateInfo } from '../services/system'
-
-const checkingUpdate = ref(false)
-const applyingUpdate = ref(false)
-const updateInfo = ref<UpdateInfo | null>(null)
-
-async function doCheckUpdate() {
-  checkingUpdate.value = true
-  try {
-    const res = await systemService.checkUpdate()
-    if (!res.ok) throw new Error(res.error.message || '检查更新失败')
-    updateInfo.value = res.data
-    if (!res.data.has_update) {
-      ElMessage.success('当前已是最新版本')
-    }
-  } catch (e: any) {
-    ElMessage.error(e.message || '检查更新失败')
-  } finally {
-    checkingUpdate.value = false
-  }
-}
-
-async function doApplyUpdate() {
-  if (!updateInfo.value) return
-
-  if (updateInfo.value.is_docker) {
-    ElMessageBox.alert(
-      '检测到当前系统运行在 Docker 环境下。<br><br>不建议在 Docker 容器内直接执行文件热替换。请直接通过拉取最新镜像（如 <code>docker pull iniwex5/vohive:latest</code>）并重启容器来完成升级！',
-      '环境警告',
-      { dangerouslyUseHTMLString: true, type: 'warning' }
-    )
-    return
-  }
-
-  try {
-    await ElMessageBox.confirm(
-      `最新版本：${updateInfo.value.latest_version}，确定要现在更新并重启服务吗？<br><br><pre style="white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow-y: auto; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; margin-top: 8px;">${updateInfo.value.release_note}</pre>`,
-      '应用更新',
-      { dangerouslyUseHTMLString: true, confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
-    )
-    applyingUpdate.value = true
-    const res = await systemService.applyUpdate()
-    if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
-    ElMessage.success(res.data?.message || '正在更新...')
-    setTimeout(() => {
-      window.location.reload()
-    }, 5000)
-  } catch (e: any) {
-    if (e !== 'cancel') {
-      ElMessage.error(e.message || '应用更新失败')
-    }
-  } finally {
-    applyingUpdate.value = false
-  }
-}
-
 async function loadSecurity() {
   try {
     const result = await settingsStore.fetchSecurity()
@@ -548,26 +492,7 @@ onBeforeUnmount(() => {
 
          <div class="space-y-4 text-sm relative z-10">
             <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="版本" :value="systemInfo.version" monospace>
-                <div class="flex items-center justify-end gap-3">
-                  <el-button size="small" type="primary" class="!border-0" :loading="checkingUpdate" @click.stop="doCheckUpdate">
-                    检查更新
-                  </el-button>
-                  <span>{{ systemInfo.version || 'Unknown' }}</span>
-                </div>
-              </FieldRow>
-            </div>
-            
-            <div v-if="updateInfo?.has_update" class="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/20">
-               <div class="flex items-center gap-2 text-amber-800 dark:text-amber-200 mb-2 font-bold text-[13px]">
-                 <el-icon><Alert24Regular /></el-icon>发现新版本: {{ updateInfo.latest_version }}
-               </div>
-               <div class="text-xs text-amber-700 dark:text-amber-300/80 mb-4 whitespace-pre-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                 {{ updateInfo.release_note || '暂无更新说明' }}
-               </div>
-               <el-button type="warning" :loading="applyingUpdate" @click="doApplyUpdate" class="w-full !border-0">
-                 立即更新并重启
-               </el-button>
+              <FieldRow label="版本" :value="systemInfo.version || 'Unknown'" monospace />
             </div>
             <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
               <FieldRow label="构建时间" :value="systemInfo.build_time" monospace />

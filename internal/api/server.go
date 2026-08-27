@@ -335,7 +335,6 @@ func (s *Server) newRouter() *gin.Engine {
 	// 以下接口需要鉴权
 	api.Use(s.authMiddleware())
 	{
-		api.POST("/system/uninstall", s.handleUninstall) // 必须登录后才能调用，见 handleUninstall 内的鉴权检查
 		api.GET("/openapi.yaml", s.handleOpenAPIYAML)
 		api.GET("/openapi.json", s.handleOpenAPIJSON)
 
@@ -373,8 +372,6 @@ func (s *Server) newRouter() *gin.Engine {
 		api.PUT("/settings/security", s.handleUpdateSecuritySettings)          // 更新安全防护与限流设置
 		api.POST("/settings/password", s.handleChangePassword)                 // 修改登录密码
 		api.GET("/system/info", s.handleSystemInfo)                            // 获取系统运行与版本信息
-		api.GET("/system/update/check", s.handleCheckUpdate)                   // 检查系统更新
-		api.POST("/system/update/apply", s.handleApplyUpdate)                  // 应用系统更新
 
 		api.GET("/devices", s.handleDeviceMgmtList)                                            // 获取设备列表（管理页用）
 		api.POST("/devices", s.handleDeviceMgmtAddDevice)                                      // 添加新设备

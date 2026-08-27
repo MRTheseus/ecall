@@ -7,13 +7,6 @@ export type DocsLinks = {
   openapi_json: string
 }
 
-export type UpdateInfo = {
-  has_update: boolean
-  current_version: string
-  latest_version: string
-  release_note: string
-  is_docker: boolean
-}
 
 export type SystemInfo = {
   version: string
@@ -276,18 +269,6 @@ export const systemService = {
   testEmail(payload: TestEmailPayload) {
     return callService(async () => {
       const res = await api.post<TestEmailResponse>('/settings/notifications/email/test', payload)
-      return res.data
-    })
-  },
-  checkUpdate() {
-    return callService(async () => {
-      const res = await api.get<UpdateInfo>('/system/update/check')
-      return res.data
-    })
-  },
-  applyUpdate() {
-    return callService(async () => {
-      const res = await api.post<{ message: string }>('/system/update/apply', {})
       return res.data
     })
   }

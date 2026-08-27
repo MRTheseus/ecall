@@ -71,15 +71,13 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 		webrtc.WithSettingEngine(settingEngine),
 	)
 
-	// 3. 创建 PeerConnection
+	// 3. 创建 PeerConnection (仅使用国内高速低延迟 STUN 节点，避免因 Google STUN 超时导致 1.5s 阻塞)
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{
 					"stun:stun.qq.com:3478",
 					"stun:stun.miwifi.com:3478",
-					"stun:stun.l.google.com:19302",
-					"stun:stun1.l.google.com:19302",
 				},
 			},
 		},
@@ -122,6 +120,9 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 				gw.onDisconnect()
 			}
 		}
+	})
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		logger.Info("WebRTC ICE 状态变更", "iceState", state.String())
 	})
 
 	// 7. 设置 Remote Description

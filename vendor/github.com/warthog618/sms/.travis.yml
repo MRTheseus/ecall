@@ -1,0 +1,22 @@
+language: go
+
+go:
+  - "1.x"
+  - "1.11"
+  - tip
+
+os:
+  - linux
+  - osx
+
+matrix:
+  allow_failures:
+    - go: tip
+  fast_finish: true
+
+before_install:
+  - go get github.com/mattn/goveralls
+
+script:
+  - go test $(go list ./... | grep -v /cmd/) -coverprofile=gover.coverprofile
+  - $GOPATH/bin/goveralls -coverprofile gover.coverprofile -service=travis-ci

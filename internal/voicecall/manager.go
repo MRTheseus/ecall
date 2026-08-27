@@ -71,7 +71,8 @@ func NewManager(pool *device.Pool) *Manager {
 		logger.Info("WebRTC disconnected")
 	}
 
-	EnsureQDC507VoiceRoute()
+	// 服务冷启动时强制清场残留并重置模组语音底座
+	ResetQDC507VoiceRoute()
 
 	return m
 }

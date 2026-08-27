@@ -232,12 +232,11 @@ export function useVoiceCall() {
         })
       }
 
-      // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器与 Google 备用)
+      // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器)
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.qq.com:3478' },
-          { urls: 'stun:stun.miwifi.com:3478' },
-          { urls: 'stun:stun.l.google.com:19302' }
+          { urls: 'stun:stun.miwifi.com:3478' }
         ]
       })
       peerConnection.value = pc
@@ -326,6 +325,7 @@ export function useVoiceCall() {
       ElMessage.warning('请输入要拨打的电话号码')
       return
     }
+    ensureAudioElement()
 
     try {
       const res = await fetch('/api/voice/dial', {
@@ -354,6 +354,7 @@ export function useVoiceCall() {
 
   // 接听
   async function answer() {
+    ensureAudioElement()
     try {
       const res = await fetch('/api/voice/answer', {
         method: 'POST',
