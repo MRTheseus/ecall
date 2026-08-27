@@ -118,7 +118,7 @@ func New(cfg *config.Config, pool *device.Pool, fs http.FileSystem, proxyMgr *se
 		configPath:    configPath,
 		proxyMgr:      proxyMgr,
 		voiceGW:       voiceGW,
-		voiceCallMgr:  voicecall.NewManager(pool),
+		voiceCallMgr:  voicecall.NewManager(pool, notifyMgr),
 		notifyMgr:     notifyMgr,
 		proxyRepo:     repo.NewDBRepo(),
 		websheets:     vwebsheet.New(vwebsheet.Config{BasePath: "/api/websheets"}),

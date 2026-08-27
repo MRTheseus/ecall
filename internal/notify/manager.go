@@ -210,6 +210,8 @@ func (m *Manager) superviseChannel(ctx context.Context, ch Channel) {
 // registerCommands 向所有已启用渠道注册同一组命令处理器
 func (m *Manager) registerCommands() {
 	commands := map[string]CommandHandler{
+		"help":   m.handleCmdHelp,
+		"start":  m.handleCmdHelp,
 		"send":   m.handleCmdSendSMS,
 		"status": m.handleCmdStatus,
 		"rotate": m.handleCmdRotate,

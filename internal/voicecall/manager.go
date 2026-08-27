@@ -35,26 +35,33 @@ func executeWorkerAT(w *device.Worker, cmd string, timeout time.Duration) (strin
 	return session.Execute(cmd, timeout)
 }
 
-// Manager 管理整个系统的蜂窝语音呼叫会话与 WebRTC 网关
-type Manager struct {
-	mu           sync.RWMutex
-	pool         *device.Pool
-	currentCall  *CallSession
-	audioBridge  *AudioBridge
-	webrtcGW     *WebRTCGateway
-	subscribers  map[chan CallEvent]struct{}
-	subscribersMu sync.RWMutex
-	serialCtrl   *SerialController
-	trackerMu    sync.Mutex
-	stopTracker  chan struct{}
+// CallNotifier 定义语音呼叫模块需要的系统通知接口
+type CallNotifier interface {
+	NotifyIncomingCall(deviceID, caller, callee string)
 }
 
-func NewManager(pool *device.Pool) *Manager {
+// Manager 管理整个系统的蜂窝语音呼叫会话与 WebRTC 网关
+type Manager struct {
+	mu            sync.RWMutex
+	pool          *device.Pool
+	notifier      CallNotifier
+	currentCall   *CallSession
+	audioBridge   *AudioBridge
+	webrtcGW      *WebRTCGateway
+	subscribers   map[chan CallEvent]struct{}
+	subscribersMu sync.RWMutex
+	serialCtrl    *SerialController
+	trackerMu     sync.Mutex
+	stopTracker   chan struct{}
+}
+
+func NewManager(pool *device.Pool, notifier CallNotifier) *Manager {
 	bridge := NewAudioBridge("")
 	gw := NewWebRTCGateway(bridge)
 
 	m := &Manager{
 		pool:        pool,
+		notifier:    notifier,
 		audioBridge: bridge,
 		webrtcGW:    gw,
 		subscribers: make(map[chan CallEvent]struct{}),
@@ -64,7 +71,14 @@ func NewManager(pool *device.Pool) *Manager {
 		m.handleSerialHangup(reason)
 	}
 	m.serialCtrl.OnIncoming = func(remoteNumber string) {
-		m.OnIncomingCall("dji4g", remoteNumber)
+		devID := "dji4g"
+		if m.pool != nil {
+			workers := m.pool.GetAllWorkers()
+			if len(workers) > 0 {
+				devID = workers[0].ID
+			}
+		}
+		m.OnIncomingCall(devID, remoteNumber)
 	}
 	go m.serialCtrl.Start(context.Background())
 
@@ -76,6 +90,13 @@ func NewManager(pool *device.Pool) *Manager {
 	ResetQDC507VoiceRoute()
 
 	return m
+}
+
+// SetNotifier 动态更新或注入系统通知管理器
+func (m *Manager) SetNotifier(n CallNotifier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifier = n
 }
 
 // GetStatus 获取当前通话状态
@@ -342,6 +363,26 @@ func (m *Manager) OnIncomingCall(deviceID, remoteNumber string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 1. 同一通呼入振铃防抖去重：
+	// 基带在未接通振铃期间，会每隔 2~4 秒周期性上报一次 RING 与 +CLIP。
+	// 若当前呼入已处于振铃状态且未超时（90秒内），说明属于同一次来电，忽略重复上报，确保单次呼叫仅通知一次。
+	if m.currentCall != nil &&
+		m.currentCall.Direction == DirectionInbound &&
+		m.currentCall.State == CallStateRinging {
+		if m.currentCall.StartedAt != nil && time.Since(*m.currentCall.StartedAt) < 90*time.Second {
+			// 若之前为未知号码，本次提供了号码，补充更新
+			if (m.currentCall.RemoteNumber == "" || m.currentCall.RemoteNumber == "未知号码") && remoteNumber != "" && remoteNumber != "未知号码" {
+				m.currentCall.RemoteNumber = remoteNumber
+			}
+			return
+		}
+	}
+
+	// 2. 若当前已接通活跃，也忽略后续上报
+	if m.currentCall != nil && m.currentCall.State == CallStateActive {
+		return
+	}
+
 	now := time.Now()
 	session := &CallSession{
 		ID:           uuid.New().String(),
@@ -353,6 +394,27 @@ func (m *Manager) OnIncomingCall(deviceID, remoteNumber string) {
 	}
 	m.currentCall = session
 	m.broadcastEventLocked("incoming", session, "收到来电: "+remoteNumber)
+
+	// 启动通话状态追踪
+	m.startCallTracker(session.ID)
+
+	// 3. 异步向系统告警通知渠道（QQ机器人、Telegram、飞书、Webhook、Bark等）推送来电提醒
+	if m.notifier != nil {
+		callee := "--"
+		if m.pool != nil {
+			if w := m.pool.GetWorker(deviceID); w != nil {
+				if imsi := w.GetIMSI(); imsi != "" {
+					if phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi); err == nil && strings.TrimSpace(phone) != "" {
+						callee = strings.TrimSpace(phone)
+					}
+				}
+			}
+		}
+		notifier := m.notifier
+		go func(dev, caller, target string) {
+			notifier.NotifyIncomingCall(dev, caller, target)
+		}(deviceID, remoteNumber, callee)
+	}
 }
 func (m *Manager) handleSerialHangup(reason string) {
 	go func() {
@@ -466,7 +528,7 @@ func (m *Manager) startCallTracker(sessID string) {
 							m.currentCall.State = CallStateActive
 							m.broadcastEventLocked("connected", m.currentCall, "")
 						}
-					case 3:
+					case 3, 4, 5:
 						if m.currentCall.State != CallStateRinging {
 							m.currentCall.State = CallStateRinging
 							m.broadcastEventLocked("state_change", m.currentCall, "Ringing")

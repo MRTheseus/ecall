@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -46,10 +47,15 @@ func NewQQChannel(cfg config.QQConfig) (*QQChannel, error) {
 		AppSecret:   strings.TrimSpace(cfg.AppSecret),
 		DefaultKind: qqbot.PlainText, // 固定为纯文本
 	}, qqbot.WithPrefix("/"), // 固定为 /，与 TG Bot 统一
-		qqbot.WithUnknownCommand(func(ctx context.Context, c qqbot.Conversation, _ qqbot.ParsedCommand) error {
+		qqbot.WithUnknownCommand(func(ctx context.Context, c qqbot.Conversation, parsed qqbot.ParsedCommand) error {
 			channel.logIncoming(c.Incoming())
 			if !channel.isAllowed(c.Incoming()) {
 				return nil
+			}
+			// 私聊发送未知命令，返回可用命令及说明
+			if c.Incoming().To.Kind == qqbot.DirectRecipient {
+				_, err := c.RespondText(ctx, SupportedCommandsHelp(fmt.Sprintf("未知命令 /%s", parsed.Name)))
+				return err
 			}
 			_, err := c.RespondText(ctx, "未知命令")
 			return err
@@ -60,9 +66,17 @@ func NewQQChannel(cfg config.QQConfig) (*QQChannel, error) {
 
 	channel.app = app
 
-	// 所有文本消息都记录日志，但只对白名单内的会话进行响应
+	// 所有文本消息都记录日志，私聊时若发送内置命令之外的内容，回复命令列表及说明
 	channel.app.OnText(func(ctx context.Context, c qqbot.Conversation) error {
 		channel.logIncoming(c.Incoming())
+		if !channel.isAllowed(c.Incoming()) {
+			return nil
+		}
+		// 仅在私聊且为普通文本时响应帮助
+		if c.Incoming().To.Kind == qqbot.DirectRecipient {
+			_, err := c.RespondText(ctx, SupportedCommandsHelp("当前机器人支持以下指令："))
+			return err
+		}
 		return nil
 	})
 

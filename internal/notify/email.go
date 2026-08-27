@@ -34,9 +34,19 @@ func (c *EmailChannel) SendWithContext(ctx NotificationContext) error {
 	auth := smtp.PlainAuth("", c.cfg.Username, c.cfg.Password, c.cfg.SMTPHost)
 	addr := fmt.Sprintf("%s:%d", c.cfg.SMTPHost, c.cfg.SMTPPort)
 
-	subject := fmt.Sprintf("[Vohive] %s", ctx.Event)
+	eventTitle := ctx.Event
+	switch ctx.Event {
+	case "sms_received":
+		eventTitle = "收到新短信"
+	case "incoming_call":
+		eventTitle = "来电通知"
+	case "ip_rotated":
+		eventTitle = "公网 IP 切换"
+	}
+
+	subject := fmt.Sprintf("[Ecall] %s", eventTitle)
 	if label := ctx.DeviceLabel(); label != "未知设备" {
-		subject = fmt.Sprintf("[Vohive] %s - %s", ctx.Event, label)
+		subject = fmt.Sprintf("[Ecall] %s - %s", eventTitle, label)
 	}
 
 	to := strings.Join(c.cfg.ToAddresses, ",")

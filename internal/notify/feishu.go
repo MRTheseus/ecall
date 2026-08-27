@@ -204,9 +204,15 @@ func (f *FeishuChannel) handleMessageEvent(event *larkim.P2MessageReceiveV1) {
 		return
 	}
 
+	isP2P := msg.ChatType != nil && *msg.ChatType == "p2p"
+
 	text := strings.TrimSpace(textContent.Text)
 	if !strings.HasPrefix(text, "/") {
-		return // 不是命令消息
+		// 非命令消息：私聊场景回复支持的命令说明
+		if isP2P {
+			f.replyToMessage(msg, SupportedCommandsHelp("当前机器人支持以下指令："))
+		}
+		return
 	}
 
 	// 解析命令和参数
@@ -221,7 +227,11 @@ func (f *FeishuChannel) handleMessageEvent(event *larkim.P2MessageReceiveV1) {
 
 	handler, ok := f.handlers[command]
 	if !ok {
-		f.replyToMessage(msg, unknownCommandReply(command))
+		if isP2P {
+			f.replyToMessage(msg, SupportedCommandsHelp(fmt.Sprintf("未知命令 /%s", command)))
+		} else {
+			f.replyToMessage(msg, unknownCommandReply(command))
+		}
 		return
 	}
 
