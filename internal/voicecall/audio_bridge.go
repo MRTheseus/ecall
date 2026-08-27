@@ -69,6 +69,11 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
+	if ab.recCmd != nil && ab.recCmd.Process != nil && ab.source != nil {
+		logger.Info("AudioBridge 已经处于打开状态，跳过重复初始化")
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	ab.cancelFunc = cancel
 
@@ -77,8 +82,8 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 
 	logger.Info("AudioBridge 正在启动 ALSA 双向音频管道", "alsa_device", dev)
 
-	// 1. 启动 arecord 录音子进程 (模组 ➔ WebRTC 听筒)
-	recCmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw")
+	// 1. 启动 arecord 录音子进程 (模组 ➔ WebRTC 听筒)，配置 20ms 硬件周期以消除缓冲延迟
+	recCmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=80000")
 	recStdout, err := recCmd.StdoutPipe()
 	if err != nil {
 		logger.Warn("创建 arecord 管道失败", "err", err)
@@ -90,8 +95,8 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 		ab.source = recStdout
 	}
 
-	// 2. 启动 aplay 放音子进程 (麦克风 ➔ 模组基带 ➔ 对方手机)
-	playCmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw")
+	// 2. 启动 aplay 放音子进程 (麦克风 ➔ 模组基带 ➔ 对方手机)，配置 20ms 硬件周期
+	playCmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=80000")
 	playStdin, err := playCmd.StdinPipe()
 	if err != nil {
 		logger.Warn("创建 aplay 管道失败", "err", err)
@@ -163,10 +168,12 @@ func (ab *AudioBridge) Close() error {
 
 	if ab.recCmd != nil && ab.recCmd.Process != nil {
 		_ = ab.recCmd.Process.Kill()
+		_ = ab.recCmd.Wait()
 		ab.recCmd = nil
 	}
 	if ab.playCmd != nil && ab.playCmd.Process != nil {
 		_ = ab.playCmd.Process.Kill()
+		_ = ab.playCmd.Wait()
 		ab.playCmd = nil
 	}
 

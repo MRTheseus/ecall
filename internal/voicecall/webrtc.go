@@ -76,6 +76,8 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{
+					"stun:stun.qq.com:3478",
+					"stun:stun.miwifi.com:3478",
 					"stun:stun.l.google.com:19302",
 					"stun:stun1.l.google.com:19302",
 				},
@@ -172,7 +174,8 @@ func (gw *WebRTCGateway) startTranscoders() {
 	ctx := gw.ctx
 
 	// 下行编码器: PCM 8kHz S16_LE → Opus (读取 AudioBridge → ffmpeg → Opus 帧)
-	// ffmpeg 从 stdin 读取原始 PCM，输出 OGG/Opus 到 stdout
+	// ffmpeg 从 stdin 读取原始 PCM，输出 OGG/Opus 到 stdout。
+	// 极其关键：必须指定 -page_duration 20000 和 -flush_packets 1，否则 ffmpeg Ogg 封装器默认等待 1 秒才输出首个 Ogg Page，导致 WebRTC 音频彻底断流饥饿！
 	gw.downEncoder = exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
@@ -180,6 +183,8 @@ func (gw *WebRTCGateway) startTranscoders() {
 		"-b:a", "24000",
 		"-application", "voip",
 		"-frame_duration", "20",
+		"-page_duration", "20000",
+		"-flush_packets", "1",
 		"-f", "opus", "pipe:1",
 	)
 	downIn, err := gw.downEncoder.StdinPipe()
@@ -230,6 +235,7 @@ func (gw *WebRTCGateway) startTranscoders() {
 		"-hide_banner", "-loglevel", "error",
 		"-c:a", "libopus",
 		"-f", "ogg", "-i", "pipe:0",
+		"-flush_packets", "1",
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:1",
 	)
 	upIn, err := gw.upDecoder.StdinPipe()

@@ -71,6 +71,8 @@ func NewManager(pool *device.Pool) *Manager {
 		logger.Info("WebRTC disconnected")
 	}
 
+	EnsureQDC507VoiceRoute()
+
 	return m
 }
 
@@ -139,6 +141,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (*CallSession, erro
 	m.currentCall = session
 
 	_ = m.audioBridge.Open(context.Background())
+	EnsureQDC507VoiceRoute()
 
 	go func(target string, sessID string) {
 		dialCmd := fmt.Sprintf("ATD%s;", target)
@@ -188,6 +191,7 @@ func (m *Manager) Answer(ctx context.Context) (*CallSession, error) {
 	m.currentCall.State = CallStateActive
 	m.currentCall.ConnectedAt = &now
 	_ = m.audioBridge.Open(context.Background())
+	EnsureQDC507VoiceRoute()
 
 	m.broadcastEventLocked("state_change", m.currentCall, "已接通")
 	return m.currentCall, nil

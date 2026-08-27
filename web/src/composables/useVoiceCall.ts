@@ -32,6 +32,7 @@ let ws: WebSocket | null = null
 let heartbeatTimer: any = null
 let durationTimer: any = null
 let resetTimer: any = null
+let isWebRTCStarting = false
 
 export function useVoiceCall() {
   const isInCall = computed(() => {
@@ -80,6 +81,7 @@ export function useVoiceCall() {
       } catch {}
     }
     isConnecting.value = false
+    isWebRTCStarting = false
     isMuted.value = false
   }
 
@@ -180,9 +182,14 @@ export function useVoiceCall() {
   // 启动 WebRTC 双向音频流
   async function startWebRTC() {
     ensureAudioElement()
-    if (peerConnection.value && peerConnection.value.connectionState === 'connected') {
+    // 防重入互斥锁：如果正在建立，或者连接已经处于正常活动状态，直接复用跳过
+    if (isWebRTCStarting) {
       return
     }
+    if (peerConnection.value && ['connecting', 'connected'].includes(peerConnection.value.connectionState)) {
+      return
+    }
+    isWebRTCStarting = true
 
     try {
       isConnecting.value = true
@@ -219,9 +226,13 @@ export function useVoiceCall() {
       })
       localStream.value = stream
 
-      // 2. 创建 PeerConnection
+      // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器与 Google 备用)
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.qq.com:3478' },
+          { urls: 'stun:stun.miwifi.com:3478' },
+          { urls: 'stun:stun.l.google.com:19302' }
+        ]
       })
       peerConnection.value = pc
 
@@ -230,17 +241,24 @@ export function useVoiceCall() {
 
       // 接收远端模组声音
       pc.ontrack = (event) => {
-        if (audioElement.value && event.streams[0]) {
-          audioElement.value.srcObject = event.streams[0]
+        ensureAudioElement()
+        if (audioElement.value) {
+          const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track])
+          audioElement.value.srcObject = stream
           audioElement.value.play().catch((e) => console.log('Audio autoplay blocked', e))
         }
       }
 
-      // 监听连接状态：服务端挂断或异常断开时强制释放麦克风
+      // 监听连接状态：
       pc.onconnectionstatechange = () => {
+        // 关键防护 1：如果是旧连接的异步回调，坚决忽略，绝不能误杀当前新连接！
+        if (pc !== peerConnection.value) return
+
         const state = pc.connectionState
-        if (state === 'failed' || state === 'closed' || state === 'disconnected') {
-          console.log('PeerConnection 状态变为', state, '，强制释放麦克风')
+        console.log('PeerConnection 状态变更:', state)
+        // 关键防护 2：切勿在 'disconnected' 时立即销毁！网络短暂抖动会自动重连，只有 'failed' 才是真正的终态异常
+        if (state === 'failed') {
+          console.warn('PeerConnection 彻底失败，释放媒体资源')
           releaseMedia()
         }
       }
@@ -285,8 +303,10 @@ export function useVoiceCall() {
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerData.sdp }))
       isConnecting.value = false
     } catch (err: any) {
-      isConnecting.value = false
       console.warn('WebRTC 启动状态:', err.message || err)
+    } finally {
+      isConnecting.value = false
+      isWebRTCStarting = false
     }
   }
 
