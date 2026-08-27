@@ -225,6 +225,12 @@ export function useVoiceCall() {
         video: false
       })
       localStream.value = stream
+      // 如果当前处于静音状态，立即应用到新音频流
+      if (isMuted.value) {
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = false
+        })
+      }
 
       // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器与 Google 备用)
       const pc = new RTCPeerConnection({
@@ -410,12 +416,24 @@ export function useVoiceCall() {
 
   // 切换静音
   function toggleMute() {
-    if (!localStream.value) return
+    if (!localStream.value) {
+      ElMessage.warning('麦克风音频流尚未就绪')
+      return
+    }
     isMuted.value = !isMuted.value
+    // 1. 同步本地 MediaStream 轨道的启用状态
     localStream.value.getAudioTracks().forEach((track) => {
       track.enabled = !isMuted.value
     })
-    ElMessage.info(isMuted.value ? '已静音麦克风' : '已取消静音')
+    // 2. 双重保障：同步 WebRTC PeerConnection 发送端 (RTCRtpSender) 上的轨道状态
+    if (peerConnection.value) {
+      peerConnection.value.getSenders().forEach((sender) => {
+        if (sender.track && sender.track.kind === 'audio') {
+          sender.track.enabled = !isMuted.value
+        }
+      })
+    }
+    ElMessage.info(isMuted.value ? '已静音麦克风' : '已取消静音，麦克风已恢复')
   }
 
   onMounted(() => {

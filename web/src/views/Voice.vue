@@ -140,14 +140,15 @@ const callStatusText = computed(() => {
             <div class="flex items-center justify-center gap-6 pt-4">
               <!-- 静音麦克风 -->
               <button
-                @click="toggleMute"
+                type="button"
+                @click.stop="toggleMute"
                 :class="[
-                  'flex h-14 w-14 items-center justify-center rounded-full transition-all active:scale-95 shadow-md',
+                  'flex h-14 w-14 items-center justify-center rounded-full transition-all active:scale-95 shadow-md select-none',
                   isMuted
-                    ? 'bg-amber-500 text-white'
+                    ? 'bg-amber-500 text-white ring-4 ring-amber-300/60 dark:ring-amber-600/60'
                     : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200'
                 ]"
-                :title="isMuted ? '取消静音' : '静音麦克风'"
+                :title="isMuted ? '点击恢复麦克风 (当前已静音)' : '静音麦克风'"
               >
                 <el-icon :size="24">
                   <MicOff24Filled v-if="isMuted" />
