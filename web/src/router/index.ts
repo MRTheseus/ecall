@@ -42,9 +42,7 @@ const router = createRouter({
     },
     {
       path: '/proxy',
-      name: 'Proxy',
-      component: () => import('../views/Proxy.vue'),
-      meta: { requiresAuth: true }
+      redirect: { path: '/settings', query: { tab: 'proxy' } }
     },
     {
       path: '/logs',

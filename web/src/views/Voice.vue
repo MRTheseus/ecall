@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useVoiceCall } from '../composables/useVoiceCall'
+import { api } from '../stores/auth'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Call24Filled,
   CallEnd24Filled,
@@ -8,12 +11,26 @@ import {
   MicOff24Filled,
   Backspace24Regular,
   NumberSymbol24Regular,
-  Dialpad24Regular
+  Dialpad24Regular,
+  Star24Regular,
+  History24Regular,
+  CallMissed24Regular,
+  ArrowUpRight24Regular,
+  ArrowDownLeft24Regular,
+  Delete24Regular
 } from '@vicons/fluent'
+import { Loading } from '@element-plus/icons-vue'
 
+const route = useRoute()
+const queryDevice = typeof route.query.device === 'string' ? route.query.device : ''
 const dialNumber = ref('')
-const selectedDeviceId = ref('')
+const selectedDeviceId = ref(queryDevice || localStorage.getItem('ecall_voice_device') || '')
 const showDTMF = ref(false)
+
+const availableDevices = ref<any[]>([])
+const topContacts = ref<{ remote_number: string; call_count: number; last_call_at: string }[]>([])
+const callRecords = ref<any[]>([])
+const loadingRecords = ref(false)
 
 const {
   currentSession,
@@ -65,6 +82,10 @@ function quickDial(num: string) {
   dial(num, selectedDeviceId.value)
 }
 
+function fillNumber(num: string) {
+  dialNumber.value = num
+}
+
 // 格式化通话时间 (秒 -> mm:ss)
 const formattedDuration = computed(() => {
   const sec = currentSession.value?.duration_sec || 0
@@ -91,25 +112,206 @@ const callStatusText = computed(() => {
       return ''
   }
 })
+
+// 拉取设备列表
+async function fetchDevices() {
+  try {
+    const res = await api.get('/devices')
+    const list = res.data?.devices || []
+    availableDevices.value = list
+    
+    // 如果 URL 参数指定了有效设备，优先选中
+    const qDev = typeof route.query.device === 'string' ? route.query.device : ''
+    if (qDev && list.some((d: any) => d.id === qDev)) {
+      selectedDeviceId.value = qDev
+      return
+    }
+
+    // 自动选中在线设备
+    const running = list.filter((d: any) => d.running)
+    if (running.length > 0) {
+      if (!selectedDeviceId.value || !running.some((d: any) => d.id === selectedDeviceId.value)) {
+        selectedDeviceId.value = running[0].id
+      }
+    } else if (list.length > 0 && !selectedDeviceId.value) {
+      selectedDeviceId.value = list[0].id
+    }
+  } catch (e) {
+    console.error('拉取设备列表失败', e)
+  }
+}
+
+// 拉取最高频 Top 3 号码
+async function fetchTopContacts() {
+  try {
+    const res = await api.get('/voice/top-contacts', { params: { limit: 3 } })
+    topContacts.value = res.data?.contacts || []
+  } catch (e) {
+    console.error('获取高频联系人失败', e)
+  }
+}
+
+// 拉取通话记录
+async function fetchCallRecords() {
+  loadingRecords.value = true
+  try {
+    const res = await api.get('/voice/records', { params: { limit: 50 } })
+    callRecords.value = res.data?.records || []
+  } catch (e) {
+    console.error('获取通话记录失败', e)
+  } finally {
+    loadingRecords.value = false
+  }
+}
+
+// 删除单条通话记录
+async function handleDeleteRecord(id: number) {
+  try {
+    await api.delete(`/voice/records/${id}`)
+    ElMessage.success('已删除记录')
+    await fetchCallRecords()
+    await fetchTopContacts()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '删除失败')
+  }
+}
+
+// 清空所有通话记录
+async function handleClearHistory() {
+  try {
+    await ElMessageBox.confirm('确定要清空所有通话记录吗？此操作不可恢复。', '清空记录', {
+      confirmButtonText: '确定清空',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await api.delete('/voice/records')
+    ElMessage.success('通话记录已全部清空')
+    await fetchCallRecords()
+    await fetchTopContacts()
+  } catch (e) {
+    // cancelled
+  }
+}
+
+// 格式化通话记录时间
+function formatCallTime(ts: string) {
+  if (!ts) return ''
+  const date = new Date(ts)
+  if (isNaN(date.getTime())) return ''
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  if (isToday) {
+    return `${hours}:${minutes}`
+  }
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `昨天 ${hours}:${minutes}`
+  }
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  return `${month}/${day} ${hours}:${minutes}`
+}
+
+function formatDuration(sec: number) {
+  if (!sec || sec <= 0) return '00:00'
+  const m = Math.floor(sec / 60).toString().padStart(2, '0')
+  const s = (sec % 60).toString().padStart(2, '0')
+  return `${m}:${s}`
+}
+
+function formatCallStatus(item: any) {
+  if (item.direction === 'inbound') {
+    if (item.state === 'completed') return '来电接听'
+    if (item.state === 'missed') return '未接来电'
+    return '来电未接通'
+  }
+  if (item.state === 'completed') return '呼出'
+  if (item.state === 'busy') return '对方拒接'
+  return '未接通'
+}
+
+watch(selectedDeviceId, (val) => {
+  if (val) {
+    localStorage.setItem('ecall_voice_device', val)
+  }
+})
+
+watch(() => route.query.device, (newDev) => {
+  if (typeof newDev === 'string' && newDev) {
+    selectedDeviceId.value = newDev
+  }
+})
+
+// 监听通话结束，自动刷新通话记录与高频联系人
+watch(() => currentSession.value?.state, (newState) => {
+  if (newState === 'terminated') {
+    setTimeout(() => {
+      fetchCallRecords()
+      fetchTopContacts()
+    }, 600)
+  }
+})
+
+onMounted(() => {
+  fetchDevices()
+  fetchTopContacts()
+  fetchCallRecords()
+})
 </script>
 
 <template>
   <div class="h-full w-full overflow-y-auto p-4 sm:p-6 lg:p-8">
-    <div class="mx-auto max-w-4xl space-y-6">
-      <!-- 页面头部 -->
-      <div class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <el-icon class="text-indigo-500"><Dialpad24Regular /></el-icon>
-            4G VoLTE 电话拨号
-          </h1>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            通过模组基带直接接打蜂窝网络电话 · 浏览器 WebRTC 实时双向麦克风与扬声器
-          </p>
+    <div class="mx-auto max-w-5xl space-y-6">
+      
+      <!-- 页面头部与设备切换器 -->
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white dark:bg-gray-800/80 rounded-3xl p-5 shadow-sm border border-gray-100 dark:border-gray-700/60 backdrop-blur-xl">
+        <div class="flex items-center gap-3">
+          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-600 to-cyan-400 text-white shadow-md shadow-indigo-500/20">
+            <el-icon :size="22"><Dialpad24Regular /></el-icon>
+          </div>
+          <div>
+            <h1 class="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              Ecall 电话拨号
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                VoLTE
+              </span>
+            </h1>
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              4G/5G 蜂窝全双工高清通话 · 硬件直连基带
+            </p>
+          </div>
+        </div>
+
+        <!-- 出号设备选择器 -->
+        <div class="flex items-center gap-2 self-start sm:self-auto bg-gray-50 dark:bg-gray-700/40 px-3 py-1.5 rounded-2xl border border-gray-100 dark:border-gray-700">
+          <span class="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">呼叫设备:</span>
+          <el-select
+            v-model="selectedDeviceId"
+            :disabled="!!isInCall"
+            placeholder="请选择呼叫设备"
+            class="w-48"
+            size="small"
+          >
+            <el-option
+              v-for="d in availableDevices"
+              :key="d.id"
+              :label="d.name || d.id"
+              :value="d.id"
+            >
+              <div class="flex items-center justify-between w-full">
+                <span class="font-medium text-xs">{{ d.name || d.id }}</span>
+                <span v-if="d.running" class="inline-block w-2 h-2 rounded-full bg-emerald-500 ml-2" title="在线"></span>
+                <span v-else class="inline-block w-2 h-2 rounded-full bg-gray-400 ml-2" title="离线"></span>
+              </div>
+            </el-option>
+          </el-select>
         </div>
       </div>
 
-      <!-- 拨号与通话卡片区域 -->
+      <!-- 拨号与通话主区域 -->
       <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
         
         <!-- 左侧/主要：拨号面板 -->
@@ -204,6 +406,7 @@ const callStatusText = computed(() => {
                 v-model="dialNumber"
                 type="text"
                 placeholder="输入电话号码..."
+                @keyup.enter="handleCall"
                 class="w-full text-center text-3xl font-mono font-bold tracking-wider bg-transparent text-gray-900 dark:text-white focus:outline-none placeholder:text-gray-300 dark:placeholder:text-gray-600 placeholder:text-xl"
               />
               <button
@@ -243,69 +446,131 @@ const callStatusText = computed(() => {
           </div>
         </div>
 
-        <!-- 右侧：快捷拨号与说明 -->
+        <!-- 右侧：快捷拨号 (Top 3) + 通话记录 -->
         <div class="md:col-span-5 space-y-6">
-          <!-- 快捷服务热线 -->
-          <div class="bg-white dark:bg-gray-800/80 rounded-3xl p-6 shadow-sm border border-gray-100 dark:border-gray-700/60">
-            <h3 class="text-base font-bold text-gray-900 dark:text-white mb-4">
-              常用快捷呼叫
-            </h3>
-            <div class="grid grid-cols-2 gap-3">
-              <button
-                @click="quickDial('10086')"
-                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50 dark:bg-gray-700/40 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all text-left group"
-              >
-                <div>
-                  <div class="font-bold font-mono text-gray-800 dark:text-gray-200">10086</div>
-                  <div class="text-xs text-gray-400">中国移动客服</div>
-                </div>
-                <el-icon class="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity"><Call24Filled /></el-icon>
-              </button>
+          
+          <!-- 区域 A: 常用快捷呼叫 (动态 Top 3) -->
+          <div class="bg-white dark:bg-gray-800/80 rounded-3xl p-5 shadow-sm border border-gray-100 dark:border-gray-700/60">
+            <div class="flex items-center justify-between mb-3.5">
+              <h3 class="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                <el-icon class="text-amber-500"><Star24Regular /></el-icon>
+                常用快捷呼叫
+              </h3>
+              <span class="text-[11px] text-gray-400">近期高频</span>
+            </div>
 
-              <button
-                @click="quickDial('10010')"
-                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50 dark:bg-gray-700/40 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all text-left group"
+            <!-- 动态渲染 Top 3 联系人卡片 -->
+            <div v-if="topContacts.length > 0" class="space-y-2.5">
+              <div
+                v-for="contact in topContacts"
+                :key="contact.remote_number"
+                @click="quickDial(contact.remote_number)"
+                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50/80 dark:bg-gray-700/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all cursor-pointer group"
               >
-                <div>
-                  <div class="font-bold font-mono text-gray-800 dark:text-gray-200">10010</div>
-                  <div class="text-xs text-gray-400">中国联通客服</div>
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-cyan-400 text-white font-bold flex items-center justify-center text-xs shadow-sm">
+                    {{ contact.remote_number.slice(-2) }}
+                  </div>
+                  <div>
+                    <div class="font-bold font-mono text-sm text-gray-800 dark:text-gray-200 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                      {{ contact.remote_number }}
+                    </div>
+                    <div class="text-[11px] text-gray-400">
+                      累计通话 {{ contact.call_count }} 次
+                    </div>
+                  </div>
                 </div>
-                <el-icon class="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity"><Call24Filled /></el-icon>
-              </button>
+                <button class="h-9 w-9 rounded-full bg-white dark:bg-gray-600/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                  <el-icon :size="18"><Call24Filled /></el-icon>
+                </button>
+              </div>
+            </div>
 
-              <button
-                @click="quickDial('10000')"
-                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50 dark:bg-gray-700/40 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all text-left group"
-              >
-                <div>
-                  <div class="font-bold font-mono text-gray-800 dark:text-gray-200">10000</div>
-                  <div class="text-xs text-gray-400">中国电信客服</div>
-                </div>
-                <el-icon class="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity"><Call24Filled /></el-icon>
-              </button>
-
-              <button
-                @click="quickDial('10099')"
-                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50 dark:bg-gray-700/40 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all text-left group"
-              >
-                <div>
-                  <div class="font-bold font-mono text-gray-800 dark:text-gray-200">10099</div>
-                  <div class="text-xs text-gray-400">中国广电客服</div>
-                </div>
-                <el-icon class="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity"><Call24Filled /></el-icon>
-              </button>
+            <!-- 暂无通话记录时的占位引导 -->
+            <div v-else class="text-center py-6 text-gray-400 dark:text-gray-500 text-xs">
+              <p>暂无常用高频号码</p>
+              <p class="text-[11px] text-gray-400/80 mt-1">拨打通话后将按频次自动统计在此</p>
             </div>
           </div>
 
-          <!-- 通话提示卡片 -->
-          <div class="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-950/20 dark:to-blue-950/20 rounded-3xl p-6 border border-indigo-100/50 dark:border-indigo-900/30">
-            <h4 class="font-bold text-indigo-900 dark:text-indigo-300 text-sm mb-2">使用提示</h4>
-            <ul class="text-xs text-indigo-800/80 dark:text-indigo-300/80 space-y-2 list-disc list-inside leading-relaxed">
-              <li><b>HTTP 局域网麦克风开启方式</b>：若使用 HTTP 局域网访问，请在 Chrome 地址栏打开 <code class="bg-indigo-100 dark:bg-indigo-900 px-1 py-0.5 rounded">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>（Edge 为 <code class="bg-indigo-100 dark:bg-indigo-900 px-1 py-0.5 rounded">edge://flags/...</code>），添加当前网址为安全源并启用，重启浏览器即可使用麦克风。</li>
-              <li>通话建立后，系统将自动建立低延迟 WebRTC 媒体流通道。</li>
-              <li>支持拨打手机、座机以及带 IVR 按键导航的服务号码。</li>
-            </ul>
+          <!-- 区域 B: 手机端通话记录 (Recent Calls) -->
+          <div class="bg-white dark:bg-gray-800/80 rounded-3xl p-5 shadow-sm border border-gray-100 dark:border-gray-700/60">
+            <div class="flex items-center justify-between mb-3.5">
+              <h3 class="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                <el-icon class="text-indigo-500"><History24Regular /></el-icon>
+                通话记录
+              </h3>
+              <button
+                v-if="callRecords.length > 0"
+                @click="handleClearHistory"
+                class="text-[11px] text-gray-400 hover:text-rose-500 transition-colors cursor-pointer"
+              >
+                清空
+              </button>
+            </div>
+
+            <!-- 记录列表 -->
+            <div v-if="loadingRecords" class="py-10 text-center text-xs text-gray-400">
+              <el-icon class="animate-spin mr-1"><Loading /></el-icon> 加载通话记录...
+            </div>
+            <div v-else-if="callRecords.length === 0" class="py-10 text-center text-xs text-gray-400">
+              暂无历史通话记录
+            </div>
+            <div v-else class="space-y-1.5 max-h-[360px] overflow-y-auto pr-1">
+              <div
+                v-for="item in callRecords"
+                :key="item.id"
+                @click="fillNumber(item.remote_number)"
+                class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-all cursor-pointer group select-none"
+              >
+                <div class="flex items-center gap-3">
+                  <!-- 呼入/呼出/未接状态图标 -->
+                  <div
+                    class="w-8 h-8 rounded-xl flex items-center justify-center text-xs flex-shrink-0"
+                    :class="{
+                      'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400': item.direction === 'inbound' && item.state === 'completed',
+                      'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400': item.direction === 'outbound',
+                      'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400': item.state === 'missed' || item.state === 'busy'
+                    }"
+                  >
+                    <el-icon :size="16">
+                      <ArrowDownLeft24Regular v-if="item.direction === 'inbound' && item.state === 'completed'" />
+                      <ArrowUpRight24Regular v-else-if="item.direction === 'outbound'" />
+                      <CallMissed24Regular v-else />
+                    </el-icon>
+                  </div>
+
+                  <div class="min-w-0">
+                    <div
+                      class="font-mono font-semibold text-xs text-gray-900 dark:text-gray-100 truncate"
+                      :class="{ 'text-rose-600 dark:text-rose-400 font-bold': item.state === 'missed' }"
+                    >
+                      {{ item.remote_number || '未知号码' }}
+                    </div>
+                    <div class="text-[10px] text-gray-400 flex items-center gap-1.5 mt-0.5">
+                      <span>{{ formatCallStatus(item) }}</span>
+                      <span v-if="item.duration_sec > 0">· {{ formatDuration(item.duration_sec) }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-gray-400 font-mono">
+                    {{ formatCallTime(item.started_at) }}
+                  </span>
+                  <!-- 单条删除按钮 -->
+                  <button
+                    @click.stop="handleDeleteRecord(item.id)"
+                    class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-rose-500 p-1 transition-opacity cursor-pointer"
+                    title="删除此记录"
+                  >
+                    <el-icon :size="14"><Delete24Regular /></el-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
+
         </div>
       </div>
     </div>

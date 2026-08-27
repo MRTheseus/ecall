@@ -215,12 +215,13 @@ export function useVoiceCall() {
         throw new Error('当前浏览器不支持 mediaDevices.getUserMedia')
       }
 
-      // 1. 获取麦克风音频
+      // 1. 获取麦克风音频 (禁用 AGC 自动增益，防止说话时底噪被剧烈放大产生跟随抽吸电流声)
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: false,
+          channelCount: 1
         },
         video: false
       })

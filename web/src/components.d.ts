@@ -66,6 +66,7 @@ declare module 'vue' {
     LoadingScreen: typeof import('./components/LoadingScreen.vue')['default']
     OperatorSelectionDialog: typeof import('./components/OperatorSelectionDialog.vue')['default']
     PageHeader: typeof import('./components/PageHeader.vue')['default']
+    ProxyManagementTab: typeof import('./components/ProxyManagementTab.vue')['default']
     RefreshButton: typeof import('./components/RefreshButton.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

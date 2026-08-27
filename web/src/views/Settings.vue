@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '../stores/settings'
 import PageHeader from '../components/PageHeader.vue'
+import ProxyManagementTab from '../components/ProxyManagementTab.vue'
 import FieldRow from '../components/FieldRow.vue'
 import { 
   Key24Regular, 
@@ -14,7 +16,8 @@ import {
   Delete20Regular,
   DocumentText24Regular,
   ShieldCheckmark24Regular,
-  LockClosed24Regular
+  LockClosed24Regular,
+  Globe24Regular
 } from '@vicons/fluent'
 
 const settingsStore = useSettingsStore()
@@ -38,6 +41,22 @@ const {
   emailForm, 
   pushplusForm 
 } = storeToRefs(settingsStore)
+const route = useRoute()
+const activeMainTab = ref(
+  typeof route.query.tab === 'string' && ['proxy', 'notifications', 'security'].includes(route.query.tab)
+    ? route.query.tab
+    : 'proxy'
+)
+
+watch(
+  () => route.query.tab,
+  (newTab) => {
+    if (typeof newTab === 'string' && ['proxy', 'notifications', 'security'].includes(newTab)) {
+      activeMainTab.value = newTab
+    }
+  }
+)
+
 const activeNotifyTab = ref('telegram')
 
 
@@ -304,12 +323,32 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto">
-    <PageHeader title="系统设置" subtitle="管理网关参数与运行信息" />
+  <div class="max-w-7xl mx-auto">
+    <PageHeader title="系统设置" subtitle="管理代理服务、访问安全策略及告警通知通道" />
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <!-- Security Card (全新设计的安全与防护面板) -->
-      <div class="ui-card p-6 sm:p-8 relative overflow-hidden group">
+    <!-- 顶部主功能 Tab 切换 -->
+    <el-tabs v-model="activeMainTab" class="settings-main-tabs mb-6">
+      
+      <!-- Tab 1: 代理管理 -->
+      <el-tab-pane name="proxy">
+        <template #label>
+          <div class="flex items-center gap-2">
+            <el-icon size="16"><Globe24Regular /></el-icon>
+            <span class="font-bold">代理管理</span>
+          </div>
+        </template>
+        <ProxyManagementTab />
+      </el-tab-pane>
+
+      <!-- Tab 2: 安全与账户 -->
+      <el-tab-pane name="security">
+        <template #label>
+          <div class="flex items-center gap-2">
+            <el-icon size="16"><ShieldCheckmark24Regular /></el-icon>
+            <span class="font-bold">安全与账户</span>
+          </div>
+        </template>
+        <div class="ui-card p-6 sm:p-8 relative overflow-hidden group max-w-4xl">
          <div class="absolute top-0 right-0 w-40 h-40 bg-indigo-500/5 rounded-bl-full -mr-10 -mt-10 transition-transform group-hover:scale-110"></div>
          
          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 relative z-10">
@@ -476,62 +515,18 @@ onBeforeUnmount(() => {
          </div>
       </div>
 
-      <!-- System Info Card -->
-      <div class="ui-card p-8 relative overflow-hidden group">
-         <div class="absolute top-0 right-0 w-40 h-40 bg-indigo-500/5 rounded-bl-full -mr-10 -mt-10 transition-transform group-hover:scale-110"></div>
+            </el-tab-pane>
 
-         <div class="flex items-center gap-3 mb-6 relative z-10">
-            <div class="w-12 h-12 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-               <el-icon size="24"><Server24Regular /></el-icon>
-            </div>
-            <div>
-               <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">系统信息</h3>
-               <p class="text-xs text-gray-500">运行环境</p>
-            </div>
-         </div>
+      <!-- Tab 3: 告警通知 -->
+      <el-tab-pane name="notifications">
+        <template #label>
+          <div class="flex items-center gap-2">
+            <el-icon size="16"><Alert24Regular /></el-icon>
+            <span class="font-bold">告警通知</span>
+          </div>
+        </template>
 
-         <div class="space-y-4 text-sm relative z-10">
-            <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="版本" :value="systemInfo.version || 'Unknown'" monospace />
-            </div>
-            <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="构建时间" :value="systemInfo.build_time" monospace />
-            </div>
-            <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="配置路径" :value="systemInfo.config" monospace copyable />
-            </div>
-            <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="交流群" value="https://t.me/vohive" monospace copyable />
-            </div>
-            <div class="ui-panel-muted px-4 py-4">
-              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div class="min-w-0">
-                  <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-                      <el-icon size="18"><DocumentText24Regular /></el-icon>
-                    </div>
-                    <div>
-                      <div class="text-sm font-bold text-gray-800 dark:text-gray-100">API 文档</div>
-                      <div class="text-xs text-gray-500">打开后端直出的 OpenAPI 页面</div>
-                    </div>
-                  </div>
-
-                </div>
-                <el-button
-                  type="primary"
-                  class="self-start sm:self-center shrink-0 !border-0"
-                  :disabled="!systemInfo.docs?.swagger_ui"
-                  @click="openAPIDocs"
-                >
-                  <el-icon><DocumentText24Regular /></el-icon>
-                  打开 API 文档
-                </el-button>
-              </div>
-            </div>
-         </div>
-      </div>
-
-      <div class="notify-card ui-card p-8 relative overflow-hidden group lg:col-span-2">
+        <div class="notify-card ui-card p-8 relative overflow-hidden group">
          <div class="absolute top-0 right-0 w-40 h-40 bg-indigo-500/5 rounded-bl-full -mr-10 -mt-10 transition-transform group-hover:scale-110"></div>
 
          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 relative z-10">
@@ -936,11 +931,53 @@ onBeforeUnmount(() => {
             </el-tabs>
          </div>
       </div>
-    </div>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
 <style scoped>
+:deep(.settings-main-tabs) {
+  border: none;
+  background: transparent;
+}
+:deep(.settings-main-tabs .el-tabs__header) {
+  margin-bottom: 24px;
+  background-color: var(--el-fill-color-light);
+  border-radius: 14px;
+  border-bottom: none;
+  display: inline-flex;
+  padding: 4px;
+}
+:deep(.settings-main-tabs .el-tabs__nav-wrap::after) {
+  display: none;
+}
+:deep(.settings-main-tabs .el-tabs__active-bar) {
+  display: none;
+}
+:deep(.settings-main-tabs .el-tabs__item) {
+  height: 40px;
+  line-height: 40px;
+  padding: 0 24px !important;
+  border-radius: 10px;
+  margin-right: 4px;
+  color: var(--el-text-color-regular);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 500;
+}
+:deep(.settings-main-tabs .el-tabs__item:last-child) {
+  margin-right: 0;
+}
+:deep(.settings-main-tabs .el-tabs__item:hover) {
+  color: var(--el-color-primary);
+}
+:deep(.settings-main-tabs .el-tabs__item.is-active) {
+  background-color: var(--el-bg-color);
+  color: var(--el-color-primary);
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
 :deep(.notify-card .el-input-number) {
   width: 100%;
 }

@@ -3,10 +3,12 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/voicecall"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -196,4 +198,59 @@ func (s *Server) handleVoiceWS(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// handleVoiceRecords 获取通话历史记录列表
+func (s *Server) handleVoiceRecords(c *gin.Context) {
+	deviceID := c.Query("device_id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	records, total, err := db.GetCallRecords(deviceID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"records": records,
+		"total":   total,
+	})
+}
+
+// handleVoiceTopContacts 获取近期最高频通话的前 3 个联系人
+func (s *Server) handleVoiceTopContacts(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "3"))
+	contacts, err := db.GetTopCallContacts(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"contacts": contacts,
+	})
+}
+
+// handleVoiceDeleteRecord 删除单条通话记录
+func (s *Server) handleVoiceDeleteRecord(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录 ID"})
+		return
+	}
+	if err := db.DeleteCallRecord(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// handleVoiceClearRecords 清空所有通话记录
+func (s *Server) handleVoiceClearRecords(c *gin.Context) {
+	if err := db.ClearCallRecords(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

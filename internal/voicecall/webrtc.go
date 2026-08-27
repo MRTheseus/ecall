@@ -232,11 +232,17 @@ func (gw *WebRTCGateway) startTranscoders() {
 	}()
 
 	// 上行解码器: Opus → PCM 8kHz S16_LE (浏览器麦克风 Opus → ffmpeg → AudioBridge)
+	// 音频增强流水线:
+	// 1. aresample=8000:resample_cutoff=0.92 : 高阶重采样滤波
+	// 2. lowpass=f=3800 : 滤除 3.8kHz 以上高频分量，彻底杜绝 8kHz 降采样混叠与高频毛刺
+	// 3. volume=0.85 : 预留安全电平动态余量 (-1.4dB)
+	// 4. alimiter=limit=0.90 : 峰值限幅保护，杜绝说话时数字硬削顶破音
 	gw.upDecoder = exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-c:a", "libopus",
 		"-f", "ogg", "-i", "pipe:0",
 		"-flush_packets", "1",
+		"-af", "aresample=8000:resample_cutoff=0.92,lowpass=f=3800,volume=0.85,alimiter=limit=0.90",
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:1",
 	)
 	upIn, err := gw.upDecoder.StdinPipe()

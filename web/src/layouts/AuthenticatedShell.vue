@@ -44,7 +44,6 @@ const menuItems = [
   { index: '/', label: '仪表盘', icon: Board24Regular },
   { index: '/devices', label: '设备管理', icon: Phone24Regular },
   { index: '/voice', label: '电话拨号', icon: Call24Regular },
-  { index: '/proxy', label: '代理管理', icon: Globe24Regular },
   { index: '/sms', label: '短信中心', icon: Mail24Regular },
   { index: '/logs', label: '实时日志', icon: DocumentText24Regular },
   { index: '/settings', label: '系统设置', icon: Settings24Regular }
@@ -136,9 +135,15 @@ const activePath = computed(() => route.path)
       class="h-full ui-glass transition-[width] duration-200 relative sidebar-shell"
     >
       <div class="h-14 px-4 flex items-center" :class="collapsed ? 'justify-center px-0' : ''">
-        <div class="sidebar-brand-icon">V</div>
+        <div class="sidebar-brand-icon">
+          <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6.5C4 5.12 5.12 4 6.5 4H7.8C8.5 4 9.1 4.5 9.25 5.2L9.9 8.2C10 8.7 9.8 9.3 9.4 9.6L8.1 10.7C9.2 13.1 10.9 14.8 13.3 15.9L14.4 14.6C14.7 14.2 15.3 14 15.8 14.1L18.8 14.75C19.5 14.9 20 15.5 20 16.2V17.5C20 18.88 18.88 20 17.5 20C10.04 20 4 13.96 4 6.5Z" fill="currentColor"/>
+            <path d="M14 4C17.31 4 20 6.69 20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14 7.5C15.93 7.5 17.5 9.07 17.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
         <div v-if="!collapsed" class="ml-3">
-          <div class="sidebar-brand-title">VoHive</div>
+          <div class="sidebar-brand-title">Ecall</div>
         </div>
       </div>
 
@@ -174,9 +179,15 @@ const activePath = computed(() => route.path)
     <el-drawer v-model="drawerOpen" direction="ltr" size="256px" :with-header="false" class="mobile-drawer">
       <div class="h-full bg-white/95 dark:bg-[#141418]/95 backdrop-blur-md relative sidebar-shell">
         <div class="h-16 px-4 flex items-center">
-          <div class="sidebar-brand-icon">V</div>
+          <div class="sidebar-brand-icon">
+            <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 6.5C4 5.12 5.12 4 6.5 4H7.8C8.5 4 9.1 4.5 9.25 5.2L9.9 8.2C10 8.7 9.8 9.3 9.4 9.6L8.1 10.7C9.2 13.1 10.9 14.8 13.3 15.9L14.4 14.6C14.7 14.2 15.3 14 15.8 14.1L18.8 14.75C19.5 14.9 20 15.5 20 16.2V17.5C20 18.88 18.88 20 17.5 20C10.04 20 4 13.96 4 6.5Z" fill="currentColor"/>
+              <path d="M14 4C17.31 4 20 6.69 20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M14 7.5C15.93 7.5 17.5 9.07 17.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
           <div class="ml-3">
-            <div class="sidebar-brand-title">VoHive</div>
+            <div class="sidebar-brand-title">Ecall</div>
           </div>
         </div>
 

@@ -361,6 +361,10 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/voice/webrtc/offer", s.handleVoiceWebRTCOffer)
 		api.POST("/voice/webrtc/candidate", s.handleVoiceWebRTCCandidate)
 		api.GET("/voice/ws", s.handleVoiceWS)
+		api.GET("/voice/records", s.handleVoiceRecords)
+		api.GET("/voice/top-contacts", s.handleVoiceTopContacts)
+		api.DELETE("/voice/records/:id", s.handleVoiceDeleteRecord)
+		api.DELETE("/voice/records", s.handleVoiceClearRecords)
 
 		// ===== 系统设置 =====
 		api.GET("/settings/notifications", s.handleGetNotificationSettings)    // 获取通知设置

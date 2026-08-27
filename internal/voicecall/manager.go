@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/device"
 	"github.com/iniwex5/vohive/internal/modem"
 	"github.com/iniwex5/vohive/pkg/logger"
@@ -223,6 +224,37 @@ func (m *Manager) hangupLocked(reason string) error {
 	if m.currentCall.ConnectedAt != nil {
 		m.currentCall.DurationSec = int64(now.Sub(*m.currentCall.ConnectedAt).Seconds())
 	}
+
+	// 异步持久化通话历史记录
+	go func(call CallSession, endTime time.Time) {
+		startTime := time.Now()
+		if call.StartedAt != nil {
+			startTime = *call.StartedAt
+		}
+		record := db.CallRecord{
+			SessionID:    call.ID,
+			DeviceID:     call.DeviceID,
+			RemoteNumber: call.RemoteNumber,
+			Direction:    string(call.Direction),
+			DurationSec:  int(call.DurationSec),
+			HangupReason: call.HangupReason,
+			StartedAt:    startTime,
+			ConnectedAt:  call.ConnectedAt,
+			EndedAt:      endTime,
+		}
+		if call.ConnectedAt != nil {
+			record.State = "completed"
+		} else if call.Direction == DirectionInbound {
+			record.State = "missed"
+		} else if call.HangupReason == "busy" {
+			record.State = "busy"
+		} else {
+			record.State = "canceled"
+		}
+		if err := db.SaveCallRecord(&record); err != nil {
+			logger.Warn("保存通话记录失败", "err", err)
+		}
+	}(*m.currentCall, now)
 
 	_ = m.audioBridge.Close()
 	m.webrtcGW.Close()

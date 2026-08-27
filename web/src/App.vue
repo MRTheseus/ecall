@@ -101,12 +101,12 @@ const shell = computed(() =>
               </svg>
             </div>
             
-            <h2 class="disclaimer-title mb-5 text-2xl font-extrabold text-center text-gray-900 dark:text-white tracking-tight">VoHive 最终用户许可与免责声明</h2>
+            <h2 class="disclaimer-title mb-5 text-2xl font-extrabold text-center text-gray-900 dark:text-white tracking-tight">Ecall 最终用户许可与免责声明</h2>
             
             <div class="disclaimer-body space-y-4 text-[14px] text-gray-600 dark:text-gray-300 leading-relaxed font-medium">
               <div class="flex items-start">
                 <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">1</div>
-                <p>本软件（VoHive）属于个人开发者业余时间开发的工具软件，仅供技术研究、学习交流和个人内部测试使用。<strong class="text-indigo-600 dark:text-indigo-400">严禁用于任何商业用途</strong>，严禁作为生产环境的基础设施。</p>
+                <p>本软件（Ecall）属于个人开发者业余时间开发的工具软件，仅供技术研究、学习交流和个人内部测试使用。<strong class="text-indigo-600 dark:text-indigo-400">严禁用于任何商业用途</strong>，严禁作为生产环境的基础设施。</p>
               </div>
               <div class="flex items-start">
                 <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">2</div>
