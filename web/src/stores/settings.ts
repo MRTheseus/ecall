@@ -73,10 +73,30 @@ type PushplusForm = {
   channel: string
 }
 
+export type SecurityForm = {
+  rate_limit: {
+    enabled: boolean
+    max_attempts: number
+    window_seconds: number
+  }
+  anti_ip_spoofing: boolean
+  trusted_proxies: string
+}
+
 const DEFAULT_PASSWORD_FORM: PasswordForm = {
   old_password: '',
   new_password: '',
   confirm_password: ''
+}
+
+const DEFAULT_SECURITY_FORM: SecurityForm = {
+  rate_limit: {
+    enabled: true,
+    max_attempts: 10,
+    window_seconds: 120
+  },
+  anti_ip_spoofing: true,
+  trusted_proxies: ''
 }
 
 const DEFAULT_TELEGRAM_FORM: TelegramForm = {
@@ -165,10 +185,13 @@ export const useSettingsStore = defineStore('settings', () => {
   const barkSettings = ref<BarkSettings>({ ...DEFAULT_BARK_SETTINGS })
   const emailForm = ref<EmailForm>({ ...DEFAULT_EMAIL_FORM })
   const pushplusForm = ref<PushplusForm>({ ...DEFAULT_PUSHPLUS_FORM })
+  const securityForm = ref<SecurityForm>({ ...DEFAULT_SECURITY_FORM })
 
   const loadingSystemInfo = ref(false)
   const loadingNotifications = ref(false)
   const savingNotifications = ref(false)
+  const loadingSecurity = ref(false)
+  const savingSecurity = ref(false)
   const testingWebhook = ref(false)
   const testingBark = ref(false)
   const testingEmail = ref(false)
@@ -414,6 +437,50 @@ export const useSettingsStore = defineStore('settings', () => {
     return changePassword(passwordForm.value)
   }
 
+  async function fetchSecurity() {
+    loadingSecurity.value = true
+    const result = await systemService.getSecurity()
+    if (result.ok) {
+      const sec = result.data
+      securityForm.value = {
+        rate_limit: {
+          enabled: sec.rate_limit?.enabled ?? true,
+          max_attempts: sec.rate_limit?.max_attempts || 10,
+          window_seconds: sec.rate_limit?.window_seconds || 120
+        },
+        anti_ip_spoofing: sec.anti_ip_spoofing ?? true,
+        trusted_proxies: Array.isArray(sec.trusted_proxies) ? sec.trusted_proxies.join(', ') : ''
+      }
+      error.value = null
+    } else {
+      error.value = result.error
+    }
+    loadingSecurity.value = false
+    return result
+  }
+
+  async function saveSecurityFromForm() {
+    savingSecurity.value = true
+    const proxies = securityForm.value.trusted_proxies
+      ? securityForm.value.trusted_proxies.split(',').map(s => s.trim()).filter(Boolean)
+      : []
+    const payload = {
+      rate_limit: {
+        enabled: !!securityForm.value.rate_limit.enabled,
+        max_attempts: Number(securityForm.value.rate_limit.max_attempts) || 10,
+        window_seconds: Number(securityForm.value.rate_limit.window_seconds) || 120
+      },
+      anti_ip_spoofing: !!securityForm.value.anti_ip_spoofing,
+      trusted_proxies: proxies
+    }
+    const result = await systemService.saveSecurity(payload)
+    if (!result.ok) {
+      error.value = result.error
+    }
+    savingSecurity.value = false
+    return result
+  }
+
   function resetPasswordForm() {
     passwordForm.value = { ...DEFAULT_PASSWORD_FORM }
   }
@@ -422,6 +489,7 @@ export const useSettingsStore = defineStore('settings', () => {
     systemInfo,
     notifications,
     passwordForm,
+    securityForm,
     telegramForm,
     feishuForm,
     qqForm,
@@ -432,6 +500,8 @@ export const useSettingsStore = defineStore('settings', () => {
     loadingSystemInfo,
     loadingNotifications,
     savingNotifications,
+    loadingSecurity,
+    savingSecurity,
     testingWebhook,
     testingBark,
     testingEmail,
@@ -439,6 +509,8 @@ export const useSettingsStore = defineStore('settings', () => {
     error,
     fetchSystemInfo,
     fetchNotifications,
+    fetchSecurity,
+    saveSecurityFromForm,
     saveNotifications,
     saveNotificationsFromForms,
     testWebhookFromForm,

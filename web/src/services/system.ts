@@ -199,6 +199,28 @@ export type TestEmailResponse = {
   message: string
 }
 
+export type RateLimitSettings = {
+  enabled: boolean
+  max_attempts: number
+  window_seconds: number
+}
+
+export type SecuritySettings = {
+  rate_limit: RateLimitSettings
+  anti_ip_spoofing: boolean
+  trusted_proxies: string[]
+}
+
+export type SaveSecurityPayload = {
+  rate_limit: {
+    enabled: boolean
+    max_attempts: number
+    window_seconds: number
+  }
+  anti_ip_spoofing: boolean
+  trusted_proxies: string[]
+}
+
 export const systemService = {
   getInfo() {
     return callService(async () => {
@@ -210,6 +232,18 @@ export const systemService = {
     return callService(async () => {
       await api.post('/settings/password', payload)
       return true
+    })
+  },
+  getSecurity() {
+    return callService(async () => {
+      const res = await api.get<{ status: string; security: SecuritySettings }>('/settings/security')
+      return res.data.security
+    })
+  },
+  saveSecurity(payload: SaveSecurityPayload) {
+    return callService(async () => {
+      const res = await api.put<{ status: string; security: SecuritySettings; message: string }>('/settings/security', payload)
+      return res.data
     })
   },
   getNotifications() {

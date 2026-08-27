@@ -15,6 +15,7 @@ require (
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/miekg/dns v1.1.67
 	github.com/minio/selfupdate v0.6.0
+	github.com/pion/webrtc/v4 v4.0.10
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	github.com/things-go/go-socks5 v0.1.1
@@ -110,3 +111,6 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
+
+replace github.com/iniwex5/vowifi-go => ./pkg/vowifi-stub
+
