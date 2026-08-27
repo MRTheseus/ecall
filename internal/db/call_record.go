@@ -25,9 +25,9 @@ type CallRecord struct {
 func (CallRecord) TableName() string { return "call_records" }
 
 type TopCallContact struct {
-	RemoteNumber string    `json:"remote_number"`
-	CallCount    int       `json:"call_count"`
-	LastCallAt   time.Time `json:"last_call_at"`
+	RemoteNumber string `json:"remote_number"`
+	CallCount    int    `json:"call_count"`
+	LastCallAt   string `json:"last_call_at"`
 }
 
 // SaveCallRecord 保存通话记录

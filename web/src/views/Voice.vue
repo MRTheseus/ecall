@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useVoiceCall } from '../composables/useVoiceCall'
 import { api } from '../stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -17,15 +17,25 @@ import {
   CallMissed24Regular,
   ArrowUpRight24Regular,
   ArrowDownLeft24Regular,
-  Delete24Regular
+  Delete24Regular,
+  Mail24Regular
 } from '@vicons/fluent'
 import { Loading } from '@element-plus/icons-vue'
 
 const route = useRoute()
+const router = useRouter()
 const queryDevice = typeof route.query.device === 'string' ? route.query.device : ''
 const dialNumber = ref('')
 const selectedDeviceId = ref(queryDevice || localStorage.getItem('ecall_voice_device') || '')
 const showDTMF = ref(false)
+
+function goToSMS(phone: string) {
+  const query: Record<string, string> = { phone }
+  if (selectedDeviceId.value) {
+    query.device = selectedDeviceId.value
+  }
+  router.push({ path: '/sms', query })
+}
 
 const availableDevices = ref<any[]>([])
 const topContacts = ref<{ remote_number: string; call_count: number; last_call_at: string }[]>([])
@@ -77,13 +87,20 @@ function handleCall() {
   dial(dialNumber.value, selectedDeviceId.value)
 }
 
-function quickDial(num: string) {
-  dialNumber.value = num
-  dial(num, selectedDeviceId.value)
+const selectedContactNumber = ref<string>('')
+
+function selectContact(num: string) {
+  if (selectedContactNumber.value === num) {
+    fillNumber(num)
+  } else {
+    selectedContactNumber.value = num
+  }
 }
 
 function fillNumber(num: string) {
   dialNumber.value = num
+  selectedContactNumber.value = num
+  ElMessage.success(`已填入号码：${num}`)
 }
 
 // 格式化通话时间 (秒 -> mm:ss)
@@ -267,47 +284,44 @@ onMounted(() => {
     <div class="mx-auto max-w-5xl space-y-6">
       
       <!-- 页面头部与设备切换器 -->
-      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white dark:bg-gray-800/80 rounded-3xl p-5 shadow-sm border border-gray-100 dark:border-gray-700/60 backdrop-blur-xl">
-        <div class="flex items-center gap-3">
-          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-600 to-cyan-400 text-white shadow-md shadow-indigo-500/20">
-            <el-icon :size="22"><Dialpad24Regular /></el-icon>
-          </div>
-          <div>
-            <h1 class="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              Ecall 电话拨号
-              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-                VoLTE
-              </span>
-            </h1>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              4G/5G 蜂窝全双工高清通话 · 硬件直连基带
-            </p>
-          </div>
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-gray-800/80 rounded-2xl px-5 py-3.5 shadow-sm border border-gray-100 dark:border-gray-700/60 backdrop-blur-xl">
+        <div class="flex items-center gap-2">
+          <h1 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+            电话拨号
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+              VoLTE
+            </span>
+          </h1>
         </div>
 
-        <!-- 出号设备选择器 -->
-        <div class="flex items-center gap-2 self-start sm:self-auto bg-gray-50 dark:bg-gray-700/40 px-3 py-1.5 rounded-2xl border border-gray-100 dark:border-gray-700">
-          <span class="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">呼叫设备:</span>
-          <el-select
-            v-model="selectedDeviceId"
+        <!-- 呼叫设备选择卡片 -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-semibold text-gray-400 dark:text-gray-500 whitespace-nowrap">呼叫设备:</span>
+          <div v-if="availableDevices.length === 0" class="text-xs text-gray-400">
+            暂无可用设备
+          </div>
+          <button
+            v-for="d in availableDevices"
+            :key="d.id"
+            type="button"
             :disabled="!!isInCall"
-            placeholder="请选择呼叫设备"
-            class="w-48"
-            size="small"
+            @click="selectedDeviceId = d.id"
+            class="flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs transition-all"
+            :class="[
+              selectedDeviceId === d.id
+                ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold shadow-xs ring-1 ring-indigo-500/20'
+                : 'border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-800/60 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-900 dark:hover:text-gray-200',
+              isInCall ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+            ]"
           >
-            <el-option
-              v-for="d in availableDevices"
-              :key="d.id"
-              :label="d.name || d.id"
-              :value="d.id"
-            >
-              <div class="flex items-center justify-between w-full">
-                <span class="font-medium text-xs">{{ d.name || d.id }}</span>
-                <span v-if="d.running" class="inline-block w-2 h-2 rounded-full bg-emerald-500 ml-2" title="在线"></span>
-                <span v-else class="inline-block w-2 h-2 rounded-full bg-gray-400 ml-2" title="离线"></span>
-              </div>
-            </el-option>
-          </el-select>
+            <span
+              class="inline-block w-2 h-2 rounded-full shrink-0"
+              :class="d.running ? 'bg-emerald-500' : 'bg-gray-400'"
+              :title="d.running ? '在线' : '离线'"
+            ></span>
+            <span class="truncate max-w-[120px]">{{ d.name || d.id }}</span>
+            <span v-if="d.name && d.name !== d.id" class="text-[10px] text-gray-400 font-mono">({{ d.id }})</span>
+          </button>
         </div>
       </div>
 
@@ -464,25 +478,57 @@ onMounted(() => {
               <div
                 v-for="contact in topContacts"
                 :key="contact.remote_number"
-                @click="quickDial(contact.remote_number)"
-                class="flex items-center justify-between p-3 rounded-2xl bg-gray-50/80 dark:bg-gray-700/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 transition-all cursor-pointer group"
+                @click="selectContact(contact.remote_number)"
+                class="flex items-center justify-between p-3 rounded-2xl border transition-all cursor-pointer group select-none"
+                :class="[
+                  selectedContactNumber === contact.remote_number
+                    ? 'border-indigo-400 dark:border-indigo-500/80 bg-indigo-50/80 dark:bg-indigo-950/40 ring-1 ring-indigo-500/20 shadow-xs'
+                    : 'border-transparent hover:border-gray-200 dark:hover:border-gray-700 bg-gray-50/80 dark:bg-gray-700/30'
+                ]"
               >
-                <div class="flex items-center gap-3">
-                  <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-cyan-400 text-white font-bold flex items-center justify-center text-xs shadow-sm">
-                    {{ contact.remote_number.slice(-2) }}
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-500 to-cyan-400 text-white font-bold flex items-center justify-center text-[11px] font-mono tracking-tight shadow-sm shrink-0">
+                    {{ contact.remote_number.slice(-4) }}
                   </div>
-                  <div>
-                    <div class="font-bold font-mono text-sm text-gray-800 dark:text-gray-200 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                  <div class="min-w-0">
+                    <div
+                      class="font-bold font-mono text-sm text-gray-800 dark:text-gray-200 transition-colors truncate"
+                      :class="{ 'text-indigo-600 dark:text-indigo-400 font-extrabold': selectedContactNumber === contact.remote_number }"
+                    >
                       {{ contact.remote_number }}
                     </div>
-                    <div class="text-[11px] text-gray-400">
+                    <div class="text-[11px] text-gray-400 truncate">
                       累计通话 {{ contact.call_count }} 次
                     </div>
                   </div>
                 </div>
-                <button class="h-9 w-9 rounded-full bg-white dark:bg-gray-600/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                  <el-icon :size="18"><Call24Filled /></el-icon>
-                </button>
+
+                <!-- 操作按钮组：发短信 + 填入拨号盘 (选中时始终可见，PC端悬浮亦可见) -->
+                <div
+                  class="flex items-center gap-1.5 ml-2 shrink-0 transition-opacity"
+                  :class="[
+                    selectedContactNumber === contact.remote_number
+                      ? 'opacity-100 pointer-events-auto'
+                      : 'opacity-0 sm:group-hover:opacity-100 pointer-events-none sm:group-hover:pointer-events-auto'
+                  ]"
+                >
+                  <button
+                    type="button"
+                    @click.stop="goToSMS(contact.remote_number)"
+                    class="h-8 w-8 rounded-full bg-white dark:bg-gray-700 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/50 flex items-center justify-center shadow-xs border border-gray-200/60 dark:border-gray-600/50 transition-colors cursor-pointer"
+                    title="发送短信"
+                  >
+                    <el-icon :size="15"><Mail24Regular /></el-icon>
+                  </button>
+                  <button
+                    type="button"
+                    @click.stop="fillNumber(contact.remote_number)"
+                    class="h-8 w-8 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                    title="填入拨号盘"
+                  >
+                    <el-icon :size="15"><Call24Filled /></el-icon>
+                  </button>
+                </div>
               </div>
             </div>
 
