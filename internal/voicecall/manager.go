@@ -70,6 +70,16 @@ func NewManager(pool *device.Pool, notifier CallNotifier) *Manager {
 	m.serialCtrl.OnHangup = func(reason string) {
 		m.handleSerialHangup(reason)
 	}
+	m.serialCtrl.OnRing = func() {
+		devID := "dji4g"
+		if m.pool != nil {
+			workers := m.pool.GetAllWorkers()
+			if len(workers) > 0 {
+				devID = workers[0].ID
+			}
+		}
+		m.OnIncomingCall(devID, "未知号码")
+	}
 	m.serialCtrl.OnIncoming = func(remoteNumber string) {
 		devID := "dji4g"
 		if m.pool != nil {
@@ -228,15 +238,31 @@ func (m *Manager) Hangup(ctx context.Context) error {
 	return m.hangupLocked("user_hangup")
 }
 
+func (m *Manager) stopCallTrackerLocked() {
+	m.trackerMu.Lock()
+	defer m.trackerMu.Unlock()
+	if m.stopTracker != nil {
+		select {
+		case <-m.stopTracker:
+		default:
+			close(m.stopTracker)
+		}
+		m.stopTracker = nil
+	}
+}
+
 func (m *Manager) hangupLocked(reason string) error {
 	if m.currentCall == nil || m.currentCall.State == CallStateTerminated {
 		return nil // 幂等保护：已结束则直接返回
 	}
 
-	// 如果不是由串口URC触发的挂断，才发送 ATH 指令
-	if reason != "no_carrier" && reason != "busy" && reason != "no_answer" && reason != "remote_canceled" {
-		_, _ = m.serialCtrl.Execute("ATH", 4*time.Second)
-	}
+	// 1. 立即终止后台 CLCC 轮询协程，释放串口总线
+	m.stopCallTrackerLocked()
+
+	// 2. 发送 3GPP 标准 VoLTE 挂断指令 AT+CHUP（异步执行，避免持有全局锁阻塞）
+	go func() {
+		_, _ = m.serialCtrl.Execute("AT+CHUP", 2*time.Second)
+	}()
 
 	now := time.Now()
 	m.currentCall.State = CallStateTerminated
@@ -370,9 +396,26 @@ func (m *Manager) OnIncomingCall(deviceID, remoteNumber string) {
 		m.currentCall.Direction == DirectionInbound &&
 		m.currentCall.State == CallStateRinging {
 		if m.currentCall.StartedAt != nil && time.Since(*m.currentCall.StartedAt) < 90*time.Second {
-			// 若之前为未知号码，本次提供了号码，补充更新
+			// 若之前为未知号码，本次提供了号码，补充更新并广播
 			if (m.currentCall.RemoteNumber == "" || m.currentCall.RemoteNumber == "未知号码") && remoteNumber != "" && remoteNumber != "未知号码" {
 				m.currentCall.RemoteNumber = remoteNumber
+				m.broadcastEventLocked("incoming", m.currentCall, "收到来电: "+remoteNumber)
+				if m.notifier != nil {
+					callee := "--"
+					if m.pool != nil {
+						if w := m.pool.GetWorker(deviceID); w != nil {
+							if imsi := w.GetIMSI(); imsi != "" {
+								if phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi); err == nil && strings.TrimSpace(phone) != "" {
+									callee = strings.TrimSpace(phone)
+								}
+							}
+						}
+					}
+					notifier := m.notifier
+					go func(dev, caller, target string) {
+						notifier.NotifyIncomingCall(dev, caller, target)
+					}(deviceID, remoteNumber, callee)
+				}
 			}
 			return
 		}
@@ -420,6 +463,26 @@ func (m *Manager) handleSerialHangup(reason string) {
 	go func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+
+		if m.currentCall == nil || m.currentCall.State == CallStateTerminated {
+			return
+		}
+
+		// 呼出时被拒接 (BUSY)：保留 4 秒播放运营商早媒体提示音 ("您拨叫的用户正忙...")
+		if reason == "busy" && m.currentCall.Direction == DirectionOutbound && m.currentCall.State != CallStateActive {
+			sessID := m.currentCall.ID
+			m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+			go func(id string) {
+				time.Sleep(4 * time.Second)
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if m.currentCall != nil && m.currentCall.ID == id {
+					_ = m.hangupLocked("busy")
+				}
+			}(sessID)
+			return
+		}
+
 		_ = m.hangupLocked(reason)
 	}()
 }
@@ -462,6 +525,19 @@ func (m *Manager) startCallTracker(sessID string) {
 				if strings.Contains(resp, "NO CARRIER") || strings.Contains(resp, "BUSY") {
 					m.mu.Lock()
 					if m.currentCall != nil && m.currentCall.ID == sessID {
+						if m.currentCall.Direction == DirectionOutbound && m.currentCall.State != CallStateActive {
+							m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+							go func(id string) {
+								time.Sleep(4 * time.Second)
+								m.mu.Lock()
+								defer m.mu.Unlock()
+								if m.currentCall != nil && m.currentCall.ID == id {
+									_ = m.hangupLocked("busy")
+								}
+							}(sessID)
+							m.mu.Unlock()
+							return
+						}
 						_ = m.hangupLocked("busy")
 					}
 					m.mu.Unlock()
@@ -500,16 +576,27 @@ func (m *Manager) startCallTracker(sessID string) {
 				if matchedEntry == nil {
 					// 我们的通话已不在活跃列表中！
 					emptyCount++
-					if emptyCount >= 2 {
+					if emptyCount >= 3 {
 						m.mu.Lock()
 						if m.currentCall != nil && m.currentCall.ID == sessID {
 							reason := "call_ended"
 							if m.currentCall.Direction == DirectionInbound && m.currentCall.State == CallStateRinging {
 								reason = "remote_canceled"
+								_ = m.hangupLocked(reason)
 							} else if m.currentCall.Direction == DirectionOutbound && (m.currentCall.State == CallStateDialing || m.currentCall.State == CallStateRinging) {
 								reason = "busy"
+								m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+								go func(id string) {
+									time.Sleep(4 * time.Second)
+									m.mu.Lock()
+									defer m.mu.Unlock()
+									if m.currentCall != nil && m.currentCall.ID == id {
+										_ = m.hangupLocked("busy")
+									}
+								}(sessID)
+							} else {
+								_ = m.hangupLocked(reason)
 							}
-							_ = m.hangupLocked(reason)
 						}
 						m.mu.Unlock()
 						return

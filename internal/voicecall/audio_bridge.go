@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -69,9 +70,37 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	if ab.recCmd != nil && ab.recCmd.Process != nil && ab.source != nil {
-		logger.Info("AudioBridge 已经处于打开状态，跳过重复初始化")
+	// 1. 检查是否已经完全正常就绪
+	if ab.recCmd != nil && ab.recCmd.Process != nil && ab.source != nil &&
+		ab.playCmd != nil && ab.playCmd.Process != nil && ab.sink != nil {
+		logger.Info("AudioBridge 已经处于完全就绪状态，复用现有音频管道")
 		return nil
+	}
+
+	// 2. 清理旧资源
+	if ab.cancelFunc != nil {
+		ab.cancelFunc()
+		ab.cancelFunc = nil
+	}
+	if ab.source != nil {
+		_ = ab.source.Close()
+		ab.source = nil
+	}
+	if ab.sink != nil {
+		_ = ab.sink.Close()
+		ab.sink = nil
+	}
+	if ab.recCmd != nil && ab.recCmd.Process != nil {
+		cmd := ab.recCmd
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
+		ab.recCmd = nil
+	}
+	if ab.playCmd != nil && ab.playCmd.Process != nil {
+		cmd := ab.playCmd
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
+		ab.playCmd = nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -82,40 +111,38 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 
 	logger.Info("AudioBridge 正在启动 ALSA 双向音频管道", "alsa_device", dev)
 
-	// 1. 启动 arecord 录音子进程 (模组 ➔ WebRTC 听筒)，配置 20ms 硬件周期，160ms 缓冲以平滑网络与声卡抖动
-	recCmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
-	recStdout, err := recCmd.StdoutPipe()
-	if err != nil {
-		logger.Warn("创建 arecord 管道失败", "err", err)
-	} else if err := recCmd.Start(); err != nil {
-		logger.Warn("启动 arecord 录音进程失败", "err", err)
-	} else {
-		logger.Info("arecord 下行录音进程已就绪", "pid", recCmd.Process.Pid)
-		ab.recCmd = recCmd
-		ab.source = recStdout
+	// 1. 启动 arecord 录音子进程 (带轻度重试)
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			logger.Warn("创建 arecord 管道失败", "attempt", attempt, "err", err)
+		} else if err := cmd.Start(); err != nil {
+			logger.Warn("启动 arecord 录音进程失败", "attempt", attempt, "err", err)
+			time.Sleep(100 * time.Millisecond)
+		} else {
+			ab.recCmd = cmd
+			ab.source = stdout
+			logger.Info("arecord 下行录音进程已就绪", "pid", cmd.Process.Pid, "attempt", attempt)
+			break
+		}
 	}
 
-	// 2. 启动 aplay 放音子进程 (麦克风 ➔ 模组基带 ➔ 对方手机)，配置 20ms 硬件周期，160ms 缓冲彻底杜绝微欠载碎裂杂音
-	playCmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
-	playStdin, err := playCmd.StdinPipe()
-	if err != nil {
-		logger.Warn("创建 aplay 管道失败", "err", err)
-	} else if err := playCmd.Start(); err != nil {
-		logger.Warn("启动 aplay 放音进程失败", "err", err)
-	} else {
-		logger.Info("aplay 上行放音进程已就绪", "pid", playCmd.Process.Pid)
-		ab.playCmd = playCmd
-		ab.sink = playStdin
-	}
-
-	// 如果声卡子进程启动失败，使用安全管道自环保活
-	if ab.source == nil {
-		r, _ := io.Pipe()
-		ab.source = r
-	}
-	if ab.sink == nil {
-		_, w := io.Pipe()
-		ab.sink = w
+	// 2. 启动 aplay 放音子进程 (带轻度重试)
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			logger.Warn("创建 aplay 管道失败", "attempt", attempt, "err", err)
+		} else if err := cmd.Start(); err != nil {
+			logger.Warn("启动 aplay 放音进程失败", "attempt", attempt, "err", err)
+			time.Sleep(100 * time.Millisecond)
+		} else {
+			ab.playCmd = cmd
+			ab.sink = stdin
+			logger.Info("aplay 上行放音进程已就绪", "pid", cmd.Process.Pid, "attempt", attempt)
+			break
+		}
 	}
 
 	return nil
@@ -167,13 +194,15 @@ func (ab *AudioBridge) Close() error {
 	}
 
 	if ab.recCmd != nil && ab.recCmd.Process != nil {
-		_ = ab.recCmd.Process.Kill()
-		_ = ab.recCmd.Wait()
+		cmd := ab.recCmd
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		ab.recCmd = nil
 	}
 	if ab.playCmd != nil && ab.playCmd.Process != nil {
-		_ = ab.playCmd.Process.Kill()
-		_ = ab.playCmd.Wait()
+		cmd := ab.playCmd
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		ab.playCmd = nil
 	}
 

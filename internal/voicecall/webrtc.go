@@ -205,27 +205,35 @@ func (gw *WebRTCGateway) startTranscoders() {
 	gw.downOpusOut = downOut
 	logger.Info("下行 ffmpeg Opus 编码器已启动", "pid", gw.downEncoder.Process.Pid)
 
+	// 立即写入 3 帧静音 PCM 预热，确保 ffmpeg 瞬间输出 Ogg Header 与首包
+	silenceWarmup := make([]byte, 320*3)
+	_, _ = downIn.Write(silenceWarmup)
+
 	// 启动后台协程: 从 AudioBridge 读取 PCM 并喂给 ffmpeg 编码器
 	go func() {
 		pcmBuf := make([]byte, 320) // 8kHz 16-bit 20ms = 320 bytes
+		silence := make([]byte, 320)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 				n, err := gw.audioBridge.ReadPCM(pcmBuf)
-				if err != nil {
-					if err == io.EOF || ctx.Err() != nil {
+				if err != nil || n == 0 {
+					if ctx.Err() != nil {
 						return
 					}
-					time.Sleep(5 * time.Millisecond)
+					// 声卡暂未产出数据时，持续输入静音包保活，维持 WebRTC 时间戳平滑
+					_, _ = downIn.Write(silence)
+					time.Sleep(20 * time.Millisecond)
 					continue
 				}
-				if n > 0 {
-					_, writeErr := downIn.Write(pcmBuf[:n])
-					if writeErr != nil {
+				_, writeErr := downIn.Write(pcmBuf[:n])
+				if writeErr != nil {
+					if ctx.Err() != nil {
 						return
 					}
+					time.Sleep(10 * time.Millisecond)
 				}
 			}
 		}
@@ -305,11 +313,15 @@ func (gw *WebRTCGateway) stopTranscoders() {
 		gw.upPCMOut = nil
 	}
 	if gw.downEncoder != nil && gw.downEncoder.Process != nil {
-		_ = gw.downEncoder.Process.Kill()
+		cmd := gw.downEncoder
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		gw.downEncoder = nil
 	}
 	if gw.upDecoder != nil && gw.upDecoder.Process != nil {
-		_ = gw.upDecoder.Process.Kill()
+		cmd := gw.upDecoder
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		gw.upDecoder = nil
 	}
 }
@@ -357,9 +369,21 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		return
 	}
 
-	ogg, _, err := oggreader.NewWith(gw.downOpusOut)
-	if err != nil {
-		logger.Warn("初始化 oggreader 失败", "err", err)
+	var ogg *oggreader.OggReader
+	for attempt := 1; attempt <= 20; attempt++ {
+		if gw.ctx.Err() != nil {
+			return
+		}
+		reader, _, err := oggreader.NewWith(gw.downOpusOut)
+		if err == nil {
+			ogg = reader
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if ogg == nil {
+		logger.Warn("初始化 oggreader 失败 (超时)")
 		return
 	}
 
@@ -370,10 +394,10 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		default:
 			pageData, _, err := ogg.ParseNextPage()
 			if err != nil {
-				if err == io.EOF || gw.ctx.Err() != nil {
+				if gw.ctx.Err() != nil {
 					return
 				}
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 			if len(pageData) == 0 {

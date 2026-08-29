@@ -132,6 +132,9 @@ func (sc *SerialController) Execute(cmd string, timeout time.Duration) (string, 
 	sc.isWaitingCmd = true
 	defer func() {
 		sc.isWaitingCmd = false
+		for len(sc.cmdRespCh) > 0 {
+			<-sc.cmdRespCh
+		}
 	}()
 
 	// 写入指令
