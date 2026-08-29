@@ -2,7 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -231,6 +234,48 @@ func (s *Server) handleVoiceTopContacts(c *gin.Context) {
 	})
 }
 
+// handleVoiceRecordAudio 获取通话录音音频文件 (支持 Range 流式播放与附件下载)
+func (s *Server) handleVoiceRecordAudio(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录 ID"})
+		return
+	}
+
+	record, err := db.GetCallRecordByID(uint(id))
+	if err != nil || record == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "未找到对应的通话记录"})
+		return
+	}
+
+	if !record.HasRecording || record.RecordingFile == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该通话记录没有录音文件"})
+		return
+	}
+
+	baseDir := "/app/data/recordings"
+	if _, err := os.Stat("/app/data"); err != nil {
+		baseDir = "./data/recordings"
+	}
+
+	fullPath := filepath.Join(baseDir, record.RecordingFile)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "录音文件不存在或已被清理"})
+		return
+	}
+
+	// 支持附件下载模式
+	if c.Query("download") == "1" || c.Query("download") == "true" {
+		fileName := filepath.Base(record.RecordingFile)
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	}
+
+	c.Header("Content-Type", "audio/mpeg")
+	c.Header("Accept-Ranges", "bytes")
+	http.ServeFile(c.Writer, c.Request, fullPath)
+}
+
 // handleVoiceDeleteRecord 删除单条通话记录
 func (s *Server) handleVoiceDeleteRecord(c *gin.Context) {
 	idStr := c.Param("id")
@@ -239,6 +284,16 @@ func (s *Server) handleVoiceDeleteRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录 ID"})
 		return
 	}
+
+	// 尝试同步删除磁盘录音文件
+	if record, err := db.GetCallRecordByID(uint(id)); err == nil && record != nil && record.RecordingFile != "" {
+		baseDir := "/app/data/recordings"
+		if _, err := os.Stat("/app/data"); err != nil {
+			baseDir = "./data/recordings"
+		}
+		_ = os.Remove(filepath.Join(baseDir, record.RecordingFile))
+	}
+
 	if err := db.DeleteCallRecord(uint(id)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -248,6 +303,13 @@ func (s *Server) handleVoiceDeleteRecord(c *gin.Context) {
 
 // handleVoiceClearRecords 清空所有通话记录
 func (s *Server) handleVoiceClearRecords(c *gin.Context) {
+	// 尝试清理所有录音文件
+	baseDir := "/app/data/recordings"
+	if _, err := os.Stat("/app/data"); err != nil {
+		baseDir = "./data/recordings"
+	}
+	_ = os.RemoveAll(baseDir)
+
 	if err := db.ClearCallRecords(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

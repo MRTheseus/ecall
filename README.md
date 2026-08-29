@@ -126,7 +126,7 @@ services:
   vohive:
     image: vohive:voice
     container_name: vohive
-    restart: unless-stopped
+    restart: always               # 始终开机自启 (即使手动 stop，开机/重启依然自启)
     privileged: true              # 必须开启特权模式，用于访问 ALSA 声卡与 USB 节点
     network_mode: host            # 必须开启 host 网络模式，用于 WebRTC UDP 媒体流低延迟穿透
     volumes:

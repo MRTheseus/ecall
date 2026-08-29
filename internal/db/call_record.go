@@ -8,18 +8,21 @@ import (
 
 // CallRecord 通话记录表
 type CallRecord struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	SessionID    string     `gorm:"column:session_id;index" json:"session_id"`
-	DeviceID     string     `gorm:"column:device_id;index" json:"device_id"`
-	RemoteNumber string     `gorm:"column:remote_number;index" json:"remote_number"`
-	Direction    string     `gorm:"column:direction" json:"direction"` // "inbound" | "outbound"
-	State        string     `gorm:"column:state" json:"state"`         // "completed" (接通), "missed" (未接), "busy" (拒接), "canceled" (取消)
-	DurationSec  int        `gorm:"column:duration_sec" json:"duration_sec"`
-	HangupReason string     `gorm:"column:hangup_reason" json:"hangup_reason"`
-	StartedAt    time.Time  `gorm:"column:started_at;index:idx_call_records_started_at,sort:desc" json:"started_at"`
-	ConnectedAt  *time.Time `gorm:"column:connected_at" json:"connected_at,omitempty"`
-	EndedAt      time.Time  `gorm:"column:ended_at" json:"ended_at"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	SessionID     string     `gorm:"column:session_id;index" json:"session_id"`
+	DeviceID      string     `gorm:"column:device_id;index" json:"device_id"`
+	RemoteNumber  string     `gorm:"column:remote_number;index" json:"remote_number"`
+	Direction     string     `gorm:"column:direction" json:"direction"` // "inbound" | "outbound"
+	State         string     `gorm:"column:state" json:"state"`         // "completed" (接通), "missed" (未接), "busy" (拒接), "canceled" (取消)
+	DurationSec   int        `gorm:"column:duration_sec" json:"duration_sec"`
+	HangupReason  string     `gorm:"column:hangup_reason" json:"hangup_reason"`
+	HasRecording  bool       `gorm:"column:has_recording;default:false" json:"has_recording"`
+	RecordingFile string     `gorm:"column:recording_file" json:"recording_file,omitempty"`
+	RecordingSize int64      `gorm:"column:recording_size" json:"recording_size,omitempty"`
+	StartedAt     time.Time  `gorm:"column:started_at;index:idx_call_records_started_at,sort:desc" json:"started_at"`
+	ConnectedAt   *time.Time `gorm:"column:connected_at" json:"connected_at,omitempty"`
+	EndedAt       time.Time  `gorm:"column:ended_at" json:"ended_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 func (CallRecord) TableName() string { return "call_records" }
@@ -36,6 +39,32 @@ func SaveCallRecord(record *CallRecord) error {
 		return nil
 	}
 	return DB.Create(record).Error
+}
+
+// GetCallRecordByID 根据 ID 获取单条通话记录
+func GetCallRecordByID(id uint) (*CallRecord, error) {
+	if DB == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var record CallRecord
+	if err := DB.First(&record, id).Error; err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+// UpdateCallRecordRecording 更新通话记录的录音文件信息
+func UpdateCallRecordRecording(sessionID string, file string, size int64) error {
+	if DB == nil || sessionID == "" {
+		return nil
+	}
+	return DB.Model(&CallRecord{}).
+		Where("session_id = ?", sessionID).
+		Updates(map[string]interface{}{
+			"has_recording":  true,
+			"recording_file": file,
+			"recording_size": size,
+		}).Error
 }
 
 // GetCallRecords 获取通话记录列表（支持设备过滤、按时间倒序）

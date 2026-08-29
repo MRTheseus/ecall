@@ -36,7 +36,7 @@ services:
   vohive:
     image: iniwex/vohive:latest
     container_name: vohive
-    restart: unless-stopped
+    restart: always
     ports:
       - "7575:7575"
     volumes:

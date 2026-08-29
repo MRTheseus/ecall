@@ -48,6 +48,7 @@ type Manager struct {
 	currentCall   *CallSession
 	audioBridge   *AudioBridge
 	webrtcGW      *WebRTCGateway
+	recorder      *CallRecorder
 	subscribers   map[chan CallEvent]struct{}
 	subscribersMu sync.RWMutex
 	serialCtrl    *SerialController
@@ -57,13 +58,15 @@ type Manager struct {
 
 func NewManager(pool *device.Pool, notifier CallNotifier) *Manager {
 	bridge := NewAudioBridge("")
-	gw := NewWebRTCGateway(bridge)
+	rec := NewCallRecorder()
+	gw := NewWebRTCGateway(bridge, rec)
 
 	m := &Manager{
 		pool:        pool,
 		notifier:    notifier,
 		audioBridge: bridge,
 		webrtcGW:    gw,
+		recorder:    rec,
 		subscribers: make(map[chan CallEvent]struct{}),
 	}
 	m.serialCtrl = NewSerialController("/dev/ttyUSB2", 115200)
@@ -226,6 +229,11 @@ func (m *Manager) Answer(ctx context.Context) (*CallSession, error) {
 	_ = m.audioBridge.Open(context.Background())
 	EnsureQDC507VoiceRoute()
 
+	// 启动服务端通话录音
+	if m.recorder != nil {
+		_ = m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber)
+	}
+
 	m.broadcastEventLocked("state_change", m.currentCall, "已接通")
 	return m.currentCall, nil
 }
@@ -272,22 +280,32 @@ func (m *Manager) hangupLocked(reason string) error {
 		m.currentCall.DurationSec = int64(now.Sub(*m.currentCall.ConnectedAt).Seconds())
 	}
 
-	// 异步持久化通话历史记录
-	go func(call CallSession, endTime time.Time) {
+	// 3. 停止录音并获取落盘文件信息
+	var recFile string
+	var recSize int64
+	if m.recorder != nil {
+		recFile, recSize, _ = m.recorder.Stop()
+	}
+
+	// 异步持久化通话历史记录与录音元数据
+	go func(call CallSession, endTime time.Time, rf string, rs int64) {
 		startTime := time.Now()
 		if call.StartedAt != nil {
 			startTime = *call.StartedAt
 		}
 		record := db.CallRecord{
-			SessionID:    call.ID,
-			DeviceID:     call.DeviceID,
-			RemoteNumber: call.RemoteNumber,
-			Direction:    string(call.Direction),
-			DurationSec:  int(call.DurationSec),
-			HangupReason: call.HangupReason,
-			StartedAt:    startTime,
-			ConnectedAt:  call.ConnectedAt,
-			EndedAt:      endTime,
+			SessionID:     call.ID,
+			DeviceID:      call.DeviceID,
+			RemoteNumber:  call.RemoteNumber,
+			Direction:     string(call.Direction),
+			DurationSec:   int(call.DurationSec),
+			HangupReason:  call.HangupReason,
+			HasRecording:  rf != "" && rs > 0,
+			RecordingFile: rf,
+			RecordingSize: rs,
+			StartedAt:     startTime,
+			ConnectedAt:   call.ConnectedAt,
+			EndedAt:       endTime,
 		}
 		if call.ConnectedAt != nil {
 			record.State = "completed"
@@ -301,7 +319,7 @@ func (m *Manager) hangupLocked(reason string) error {
 		if err := db.SaveCallRecord(&record); err != nil {
 			logger.Warn("保存通话记录失败", "err", err)
 		}
-	}(*m.currentCall, now)
+	}(*m.currentCall, now, recFile, recSize)
 
 	_ = m.audioBridge.Close()
 	m.webrtcGW.Close()
@@ -613,6 +631,13 @@ func (m *Manager) startCallTracker(sessID string) {
 					case 0:
 						if m.currentCall.State != CallStateActive {
 							m.currentCall.State = CallStateActive
+							now := time.Now()
+							if m.currentCall.ConnectedAt == nil {
+								m.currentCall.ConnectedAt = &now
+							}
+							if m.recorder != nil {
+								_ = m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber)
+							}
 							m.broadcastEventLocked("connected", m.currentCall, "")
 						}
 					case 3, 4, 5:

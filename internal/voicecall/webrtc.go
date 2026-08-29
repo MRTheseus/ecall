@@ -21,6 +21,7 @@ type WebRTCGateway struct {
 	peerConn     *webrtc.PeerConnection
 	audioTrack   *webrtc.TrackLocalStaticSample
 	audioBridge  *AudioBridge
+	recorder     *CallRecorder
 	ctx          context.Context
 	cancel       context.CancelFunc
 	onICEGather  func(candidate *webrtc.ICECandidate)
@@ -35,9 +36,10 @@ type WebRTCGateway struct {
 	oggWriter    *oggwriter.OggWriter
 }
 
-func NewWebRTCGateway(bridge *AudioBridge) *WebRTCGateway {
+func NewWebRTCGateway(bridge *AudioBridge, recorder *CallRecorder) *WebRTCGateway {
 	return &WebRTCGateway{
 		audioBridge: bridge,
+		recorder:    recorder,
 	}
 }
 
@@ -228,12 +230,17 @@ func (gw *WebRTCGateway) startTranscoders() {
 					time.Sleep(20 * time.Millisecond)
 					continue
 				}
-				_, writeErr := downIn.Write(pcmBuf[:n])
-				if writeErr != nil {
-					if ctx.Err() != nil {
-						return
+				if n > 0 {
+					if gw.recorder != nil {
+						gw.recorder.PushDownstream(pcmBuf[:n])
 					}
-					time.Sleep(10 * time.Millisecond)
+					_, writeErr := downIn.Write(pcmBuf[:n])
+					if writeErr != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
 				}
 			}
 		}
@@ -290,6 +297,9 @@ func (gw *WebRTCGateway) startTranscoders() {
 					return
 				}
 				if n > 0 {
+					if gw.recorder != nil {
+						gw.recorder.PushUpstream(pcmBuf[:n])
+					}
 					_, _ = gw.audioBridge.WritePCM(pcmBuf[:n])
 				}
 			}

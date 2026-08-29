@@ -18,7 +18,11 @@ import {
   ArrowUpRight24Regular,
   ArrowDownLeft24Regular,
   Delete24Regular,
-  Mail24Regular
+  Mail24Regular,
+  Play24Filled,
+  Pause24Filled,
+  ArrowDownload24Regular,
+  MusicNote224Regular
 } from '@vicons/fluent'
 import { Loading } from '@element-plus/icons-vue'
 
@@ -28,6 +32,77 @@ const queryDevice = typeof route.query.device === 'string' ? route.query.device 
 const dialNumber = ref('')
 const selectedDeviceId = ref(queryDevice || localStorage.getItem('ecall_voice_device') || '')
 const showDTMF = ref(false)
+
+const playingRecordId = ref<number | null>(null)
+let activeAudio: HTMLAudioElement | null = null
+
+async function handleTogglePlay(item: any) {
+  if (playingRecordId.value === item.id) {
+    if (activeAudio) {
+      activeAudio.pause()
+      activeAudio = null
+    }
+    playingRecordId.value = null
+    return
+  }
+
+  if (activeAudio) {
+    activeAudio.pause()
+    activeAudio = null
+  }
+
+  playingRecordId.value = item.id
+  try {
+    const token = localStorage.getItem('token') || ''
+    const res = await fetch(`/api/voice/records/${item.id}/audio`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!res.ok) {
+      throw new Error('录音文件加载失败')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    activeAudio = audio
+    audio.onended = () => {
+      playingRecordId.value = null
+      activeAudio = null
+    }
+    audio.onerror = () => {
+      ElMessage.error('录音播放失败')
+      playingRecordId.value = null
+      activeAudio = null
+    }
+    await audio.play()
+  } catch (e: any) {
+    ElMessage.error(e.message || '播放录音失败')
+    playingRecordId.value = null
+  }
+}
+
+async function handleDownloadRecord(item: any) {
+  try {
+    const token = localStorage.getItem('token') || ''
+    const res = await fetch(`/api/voice/records/${item.id}/audio?download=1`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!res.ok) {
+      throw new Error('下载失败')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `rec_${item.remote_number || 'call'}_${item.id}.mp3`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已开始下载录音文件')
+  } catch (e: any) {
+    ElMessage.error(e.message || '下载录音失败')
+  }
+}
 
 function goToSMS(phone: string) {
   const query: Record<string, string> = { phone }
@@ -600,7 +675,35 @@ onMounted(() => {
                   </div>
                 </div>
 
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 shrink-0">
+                  <!-- 录音在线播放/暂停与下载按钮组 -->
+                  <div v-if="item.has_recording" class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      @click.stop="handleTogglePlay(item)"
+                      class="h-7 w-7 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-xs"
+                      :class="[
+                        playingRecordId === item.id
+                          ? 'bg-rose-500 text-white animate-pulse'
+                          : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/60'
+                      ]"
+                      :title="playingRecordId === item.id ? '暂停播放' : '在线听录音'"
+                    >
+                      <el-icon :size="13">
+                        <Pause24Filled v-if="playingRecordId === item.id" />
+                        <Play24Filled v-else />
+                      </el-icon>
+                    </button>
+                    <button
+                      type="button"
+                      @click.stop="handleDownloadRecord(item)"
+                      class="h-7 w-7 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-200 flex items-center justify-center transition-colors cursor-pointer shadow-xs"
+                      title="下载录音 (MP3)"
+                    >
+                      <el-icon :size="13"><ArrowDownload24Regular /></el-icon>
+                    </button>
+                  </div>
+
                   <span class="text-[11px] text-gray-400 font-mono">
                     {{ formatCallTime(item.started_at) }}
                   </span>

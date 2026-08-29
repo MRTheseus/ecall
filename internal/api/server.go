@@ -362,6 +362,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/voice/webrtc/candidate", s.handleVoiceWebRTCCandidate)
 		api.GET("/voice/ws", s.handleVoiceWS)
 		api.GET("/voice/records", s.handleVoiceRecords)
+		api.GET("/voice/records/:id/audio", s.handleVoiceRecordAudio)
 		api.GET("/voice/top-contacts", s.handleVoiceTopContacts)
 		api.DELETE("/voice/records/:id", s.handleVoiceDeleteRecord)
 		api.DELETE("/voice/records", s.handleVoiceClearRecords)
