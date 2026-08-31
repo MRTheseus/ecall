@@ -46,9 +46,7 @@ const router = createRouter({
     },
     {
       path: '/logs',
-      name: 'Logs',
-      component: () => import('../views/Logs.vue'),
-      meta: { requiresAuth: true }
+      redirect: { path: '/settings', query: { tab: 'logs' } }
     }
   ]
 })

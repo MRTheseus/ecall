@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '../stores/settings'
 import PageHeader from '../components/PageHeader.vue'
 import ProxyManagementTab from '../components/ProxyManagementTab.vue'
+import SystemLogsTab from '../components/SystemLogsTab.vue'
 import FieldRow from '../components/FieldRow.vue'
 import { 
   Key24Regular, 
@@ -43,7 +44,7 @@ const {
 } = storeToRefs(settingsStore)
 const route = useRoute()
 const activeMainTab = ref(
-  typeof route.query.tab === 'string' && ['proxy', 'notifications', 'security'].includes(route.query.tab)
+  typeof route.query.tab === 'string' && ['proxy', 'notifications', 'security', 'logs'].includes(route.query.tab)
     ? route.query.tab
     : 'proxy'
 )
@@ -51,7 +52,7 @@ const activeMainTab = ref(
 watch(
   () => route.query.tab,
   (newTab) => {
-    if (typeof newTab === 'string' && ['proxy', 'notifications', 'security'].includes(newTab)) {
+    if (typeof newTab === 'string' && ['proxy', 'notifications', 'security', 'logs'].includes(newTab)) {
       activeMainTab.value = newTab
     }
   }
@@ -926,11 +927,22 @@ onBeforeUnmount(() => {
                       <el-input-number v-model="webhookSettings.retry_max" :min="0" :max="10" :disabled="!webhookSettings.enabled" class="w-full !w-full" controls-position="right" />
                     </div>
                   </div>
-                </div>
+                 </div>
               </el-tab-pane>
             </el-tabs>
          </div>
       </div>
+      </el-tab-pane>
+
+      <!-- Tab 4: 实时日志 -->
+      <el-tab-pane name="logs">
+        <template #label>
+          <div class="flex items-center gap-2">
+            <el-icon size="16"><DocumentText24Regular /></el-icon>
+            <span class="font-bold">实时日志</span>
+          </div>
+        </template>
+        <SystemLogsTab />
       </el-tab-pane>
     </el-tabs>
   </div>

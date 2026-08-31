@@ -35,6 +35,80 @@ let durationTimer: any = null
 let resetTimer: any = null
 let isWebRTCStarting = false
 
+// 标准 ITU-T 双音多频 (DTMF) 频率表 (Hz)
+const DTMF_FREQS: Record<string, [number, number]> = {
+  '1': [697, 1209],
+  '2': [697, 1336],
+  '3': [697, 1477],
+  '4': [770, 1209],
+  '5': [770, 1336],
+  '6': [770, 1477],
+  '7': [852, 1209],
+  '8': [852, 1336],
+  '9': [852, 1477],
+  '*': [941, 1209],
+  '0': [941, 1336],
+  '#': [941, 1477]
+}
+
+let dtmfAudioCtx: AudioContext | null = null
+const isKeyToneEnabled = ref<boolean>(typeof window !== 'undefined' ? localStorage.getItem('ecall_key_tone') !== 'false' : true)
+
+function toggleKeyTone() {
+  isKeyToneEnabled.value = !isKeyToneEnabled.value
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('ecall_key_tone', String(isKeyToneEnabled.value))
+  }
+}
+
+/**
+ * 播放逼真的手机拨号标准 DTMF 按键音
+ * 纯本地 Web Audio API 独立输出，与 WebRTC 媒体流完全隔离，绝不影响通话
+ */
+function playDTMFTone(digit: string, durationMs: number = 100) {
+  if (!isKeyToneEnabled.value || typeof window === 'undefined') return
+  const freqs = DTMF_FREQS[digit]
+  if (!freqs) return
+
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioContextClass) return
+
+    if (!dtmfAudioCtx) {
+      dtmfAudioCtx = new AudioContextClass()
+    } else if (dtmfAudioCtx.state === 'suspended') {
+      dtmfAudioCtx.resume().catch(() => {})
+    }
+
+    const now = dtmfAudioCtx.currentTime
+    const duration = durationMs / 1000
+
+    // 主增益与指数淡出（防爆音）
+    const masterGain = dtmfAudioCtx.createGain()
+    masterGain.gain.setValueAtTime(0.12, now)
+    masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration)
+    masterGain.connect(dtmfAudioCtx.destination)
+
+    // 低频正弦波
+    const osc1 = dtmfAudioCtx.createOscillator()
+    osc1.type = 'sine'
+    osc1.frequency.setValueAtTime(freqs[0], now)
+    osc1.connect(masterGain)
+    osc1.start(now)
+    osc1.stop(now + duration)
+
+    // 高频正弦波
+    const osc2 = dtmfAudioCtx.createOscillator()
+    osc2.type = 'sine'
+    osc2.frequency.setValueAtTime(freqs[1], now)
+    osc2.connect(masterGain)
+    osc2.start(now)
+    osc2.stop(now + duration)
+  } catch (e) {
+    console.debug('播放 DTMF 失败', e)
+  }
+}
+
 export function useVoiceCall() {
   const isInCall = computed(() => {
     return currentSession.value && ['dialing', 'ringing', 'active'].includes(currentSession.value.state)
@@ -511,6 +585,9 @@ export function useVoiceCall() {
     isMuted,
     isConnecting,
     isRecording: computed(() => !!currentSession.value?.is_recording),
+    isKeyToneEnabled,
+    toggleKeyTone,
+    playDTMFTone,
     dial,
     answer,
     hangup,

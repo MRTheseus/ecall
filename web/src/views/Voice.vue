@@ -24,7 +24,9 @@ import {
   ArrowDownload24Regular,
   MusicNote224Regular,
   Record24Regular,
-  RecordStop24Filled
+  RecordStop24Filled,
+  Speaker224Regular,
+  SpeakerOff24Regular
 } from '@vicons/fluent'
 import { Loading } from '@element-plus/icons-vue'
 
@@ -125,6 +127,9 @@ const {
   isMuted,
   isConnecting,
   isRecording,
+  isKeyToneEnabled,
+  toggleKeyTone,
+  playDTMFTone,
   dial,
   hangup,
   toggleRecording,
@@ -148,6 +153,7 @@ const dialpadKeys = [
 ]
 
 function appendDigit(digit: string) {
+  playDTMFTone(digit)
   if (isInCall.value) {
     sendDTMF(digit)
   } else {
@@ -364,13 +370,32 @@ onMounted(() => {
       
       <!-- 页面头部与设备切换器 -->
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-gray-800/80 rounded-2xl px-5 py-3.5 shadow-sm border border-gray-100 dark:border-gray-700/60 backdrop-blur-xl">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2.5 flex-wrap">
           <h1 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
             电话拨号
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
               VoLTE
             </span>
           </h1>
+
+          <!-- 按键音独立开关 -->
+          <button
+            type="button"
+            @click="toggleKeyTone"
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs transition-all cursor-pointer select-none"
+            :class="[
+              isKeyToneEnabled
+                ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 font-semibold shadow-xs ring-1 ring-indigo-500/20'
+                : 'border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+            ]"
+            :title="isKeyToneEnabled ? '点击静音按键音' : '点击开启按键音'"
+          >
+            <el-icon :size="14">
+              <Speaker224Regular v-if="isKeyToneEnabled" />
+              <SpeakerOff24Regular v-else />
+            </el-icon>
+            <span>{{ isKeyToneEnabled ? '按键音' : '按键音(关)' }}</span>
+          </button>
         </div>
 
         <!-- 呼叫设备选择卡片 -->
