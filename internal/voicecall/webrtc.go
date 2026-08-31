@@ -1,6 +1,7 @@
 package voicecall
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"github.com/iniwex5/vohive/pkg/logger"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
@@ -182,8 +182,8 @@ func (gw *WebRTCGateway) startTranscoders() {
 	gw.downEncoder = exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
-		"-c:a", "libopus", "-ar", "48000", "-ac", "1",
-		"-b:a", "24000",
+		"-c:a", "libopus", "-ar", "48000", "-ac", "2",
+		"-b:a", "32000",
 		"-application", "voip",
 		"-frame_duration", "20",
 		"-page_duration", "20000",
@@ -398,45 +398,68 @@ func (gw *WebRTCGateway) handleIncomingAudio(remoteTrack *webrtc.TrackRemote) {
 	}
 }
 
-// startOutgoingAudioStream 从 ffmpeg 编码器读取 OggOpus，解包出裸 Opus 帧并发送给浏览器
+// startOutgoingAudioStream 从 ffmpeg 编码器读取 OggOpus，解包出裸 Opus 帧并发送给 WebRTC 客户端
 func (gw *WebRTCGateway) startOutgoingAudioStream() {
 	if gw.downOpusOut == nil || gw.audioTrack == nil {
 		return
 	}
 
-	// 一次性初始化 OggReader (由于预热和 20ms 恒定时钟，Header 必然立即可用)
-	ogg, _, err := oggreader.NewWith(gw.downOpusOut)
-	if err != nil {
-		logger.Warn("初始化 oggreader 失败", "err", err)
-		return
-	}
-
+	header := make([]byte, 27)
 	for {
-		select {
-		case <-gw.ctx.Done():
+		if gw.ctx.Err() != nil {
 			return
-		default:
-			pageData, _, err := ogg.ParseNextPage()
-			if err != nil {
-				if err == io.EOF || err == io.ErrUnexpectedEOF {
-					logger.Debug("下行 Ogg 流已结束 (EOF)")
-					return
-				}
-				if gw.ctx.Err() != nil {
-					return
-				}
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			if len(pageData) == 0 {
-				continue
-			}
+		}
 
-			err = gw.audioTrack.WriteSample(media.Sample{
-				Data:     pageData,
+		// 1. 同步读取 27 字节 OggS 头部
+		if _, err := io.ReadFull(gw.downOpusOut, header); err != nil {
+			if gw.ctx.Err() != nil {
+				return
+			}
+			logger.Debug("读取下行 Ogg 头部中断", "err", err)
+			return
+		}
+		if string(header[:4]) != "OggS" {
+			logger.Warn("非法的 OggS 签名", "sig", string(header[:4]))
+			return
+		}
+
+		numSegments := int(header[26])
+
+		// 2. 读取 segment table
+		segTable := make([]byte, numSegments)
+		if _, err := io.ReadFull(gw.downOpusOut, segTable); err != nil {
+			if gw.ctx.Err() != nil {
+				return
+			}
+			return
+		}
+
+		// 3. 计算本页 payload 总长度
+		totalLen := 0
+		for _, s := range segTable {
+			totalLen += int(s)
+		}
+
+		// 4. 读取 payload
+		payload := make([]byte, totalLen)
+		if _, err := io.ReadFull(gw.downOpusOut, payload); err != nil {
+			if gw.ctx.Err() != nil {
+				return
+			}
+			return
+		}
+
+		// 5. 过滤头部与元数据包 (OpusHead, OpusTags)
+		if bytes.HasPrefix(payload, []byte("OpusHead")) || bytes.HasPrefix(payload, []byte("OpusTags")) {
+			continue
+		}
+
+		if len(payload) > 0 {
+			err := gw.audioTrack.WriteSample(media.Sample{
+				Data:     payload,
 				Duration: 20 * time.Millisecond,
 			})
-			if err != nil && err != io.ErrClosedPipe {
+			if err != nil && err != io.ErrClosedPipe && gw.ctx.Err() == nil {
 				logger.Debug("向 WebRTC 写入音频帧失败", "err", err)
 			}
 		}

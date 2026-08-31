@@ -88,7 +88,10 @@ func GetSMSByIMSIAndPeer(imsi string, peer string, limit int, beforeTs *time.Tim
 		limit = 200
 	}
 
-	q := DB.Model(&SMS{}).Where("imsi = ? AND peer = ?", imsi, peer)
+	q := DB.Model(&SMS{}).Where("peer = ?", peer)
+	if imsi != "" {
+		q = q.Where("imsi = ?", imsi)
+	}
 	if beforeTs != nil && !beforeTs.IsZero() && beforeID > 0 {
 		q = q.Where("timestamp < ? OR (timestamp = ? AND id < ?)", *beforeTs, *beforeTs, beforeID)
 	} else if beforeTs != nil && !beforeTs.IsZero() {
@@ -113,7 +116,10 @@ func GetSMSByICCIDAndPeer(iccid string, peer string, limit int, beforeTs *time.T
 		limit = 200
 	}
 
-	q := DB.Model(&SMS{}).Where("iccid = ? AND peer = ?", iccid, peer)
+	q := DB.Model(&SMS{}).Where("peer = ?", peer)
+	if iccid != "" {
+		q = q.Where("iccid = ?", iccid)
+	}
 	if beforeTs != nil && !beforeTs.IsZero() && beforeID > 0 {
 		q = q.Where("timestamp < ? OR (timestamp = ? AND id < ?)", *beforeTs, *beforeTs, beforeID)
 	} else if beforeTs != nil && !beforeTs.IsZero() {
