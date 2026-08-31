@@ -2,11 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/voicecall"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -77,6 +82,37 @@ func (s *Server) handleVoiceHangup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// handleVoiceStartRecording 手动开启录音
+func (s *Server) handleVoiceStartRecording(c *gin.Context) {
+	if s.voiceCallMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "语音呼叫模块未就绪"})
+		return
+	}
+	if err := s.voiceCallMgr.StartRecording(c.Request.Context()); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// handleVoiceStopRecording 手动停止录音
+func (s *Server) handleVoiceStopRecording(c *gin.Context) {
+	if s.voiceCallMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "语音呼叫模块未就绪"})
+		return
+	}
+	relFile, size, err := s.voiceCallMgr.StopRecording(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"recording_file": relFile,
+		"recording_size": size,
+	})
 }
 
 // handleVoiceDTMF 发送按键音
@@ -196,4 +232,118 @@ func (s *Server) handleVoiceWS(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// handleVoiceRecords 获取通话历史记录列表
+func (s *Server) handleVoiceRecords(c *gin.Context) {
+	deviceID := c.Query("device_id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	records, total, err := db.GetCallRecords(deviceID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"records": records,
+		"total":   total,
+	})
+}
+
+// handleVoiceTopContacts 获取近期最高频通话的前 3 个联系人
+func (s *Server) handleVoiceTopContacts(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "3"))
+	contacts, err := db.GetTopCallContacts(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"contacts": contacts,
+	})
+}
+
+// handleVoiceRecordAudio 获取通话录音音频文件 (支持 Range 流式播放与附件下载)
+func (s *Server) handleVoiceRecordAudio(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录 ID"})
+		return
+	}
+
+	record, err := db.GetCallRecordByID(uint(id))
+	if err != nil || record == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "未找到对应的通话记录"})
+		return
+	}
+
+	if !record.HasRecording || record.RecordingFile == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该通话记录没有录音文件"})
+		return
+	}
+
+	baseDir := "/app/data/recordings"
+	if _, err := os.Stat("/app/data"); err != nil {
+		baseDir = "./data/recordings"
+	}
+
+	fullPath := filepath.Join(baseDir, record.RecordingFile)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "录音文件不存在或已被清理"})
+		return
+	}
+
+	// 支持附件下载模式
+	if c.Query("download") == "1" || c.Query("download") == "true" {
+		fileName := filepath.Base(record.RecordingFile)
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	}
+
+	c.Header("Content-Type", "audio/mpeg")
+	c.Header("Accept-Ranges", "bytes")
+	http.ServeFile(c.Writer, c.Request, fullPath)
+}
+
+// handleVoiceDeleteRecord 删除单条通话记录
+func (s *Server) handleVoiceDeleteRecord(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录 ID"})
+		return
+	}
+
+	// 尝试同步删除磁盘录音文件
+	if record, err := db.GetCallRecordByID(uint(id)); err == nil && record != nil && record.RecordingFile != "" {
+		baseDir := "/app/data/recordings"
+		if _, err := os.Stat("/app/data"); err != nil {
+			baseDir = "./data/recordings"
+		}
+		_ = os.Remove(filepath.Join(baseDir, record.RecordingFile))
+	}
+
+	if err := db.DeleteCallRecord(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// handleVoiceClearRecords 清空所有通话记录
+func (s *Server) handleVoiceClearRecords(c *gin.Context) {
+	// 尝试清理所有录音文件
+	baseDir := "/app/data/recordings"
+	if _, err := os.Stat("/app/data"); err != nil {
+		baseDir = "./data/recordings"
+	}
+	_ = os.RemoveAll(baseDir)
+
+	if err := db.ClearCallRecords(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

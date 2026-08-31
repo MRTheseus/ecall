@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/device"
 	"github.com/iniwex5/vohive/internal/modem"
 	"github.com/iniwex5/vohive/pkg/logger"
@@ -34,36 +35,63 @@ func executeWorkerAT(w *device.Worker, cmd string, timeout time.Duration) (strin
 	return session.Execute(cmd, timeout)
 }
 
-// Manager 管理整个系统的蜂窝语音呼叫会话与 WebRTC 网关
-type Manager struct {
-	mu           sync.RWMutex
-	pool         *device.Pool
-	currentCall  *CallSession
-	audioBridge  *AudioBridge
-	webrtcGW     *WebRTCGateway
-	subscribers  map[chan CallEvent]struct{}
-	subscribersMu sync.RWMutex
-	serialCtrl   *SerialController
-	trackerMu    sync.Mutex
-	stopTracker  chan struct{}
+// CallNotifier 定义语音呼叫模块需要的系统通知接口
+type CallNotifier interface {
+	NotifyIncomingCall(deviceID, caller, callee string)
 }
 
-func NewManager(pool *device.Pool) *Manager {
+// Manager 管理整个系统的蜂窝语音呼叫会话与 WebRTC 网关
+type Manager struct {
+	mu            sync.RWMutex
+	pool          *device.Pool
+	notifier      CallNotifier
+	currentCall   *CallSession
+	audioBridge   *AudioBridge
+	webrtcGW      *WebRTCGateway
+	recorder      *CallRecorder
+	subscribers   map[chan CallEvent]struct{}
+	subscribersMu sync.RWMutex
+	serialCtrl    *SerialController
+	trackerMu     sync.Mutex
+	stopTracker   chan struct{}
+}
+
+func NewManager(pool *device.Pool, notifier CallNotifier) *Manager {
 	bridge := NewAudioBridge("")
-	gw := NewWebRTCGateway(bridge)
+	rec := NewCallRecorder()
+	gw := NewWebRTCGateway(bridge, rec)
 
 	m := &Manager{
 		pool:        pool,
+		notifier:    notifier,
 		audioBridge: bridge,
 		webrtcGW:    gw,
+		recorder:    rec,
 		subscribers: make(map[chan CallEvent]struct{}),
 	}
 	m.serialCtrl = NewSerialController("/dev/ttyUSB2", 115200)
 	m.serialCtrl.OnHangup = func(reason string) {
 		m.handleSerialHangup(reason)
 	}
+	m.serialCtrl.OnRing = func() {
+		devID := "dji4g"
+		if m.pool != nil {
+			workers := m.pool.GetAllWorkers()
+			if len(workers) > 0 {
+				devID = workers[0].ID
+			}
+		}
+		m.OnIncomingCall(devID, "未知号码")
+	}
 	m.serialCtrl.OnIncoming = func(remoteNumber string) {
-		m.OnIncomingCall("dji4g", remoteNumber)
+		devID := "dji4g"
+		if m.pool != nil {
+			workers := m.pool.GetAllWorkers()
+			if len(workers) > 0 {
+				devID = workers[0].ID
+			}
+		}
+		m.OnIncomingCall(devID, remoteNumber)
 	}
 	go m.serialCtrl.Start(context.Background())
 
@@ -71,9 +99,17 @@ func NewManager(pool *device.Pool) *Manager {
 		logger.Info("WebRTC disconnected")
 	}
 
-	EnsureQDC507VoiceRoute()
+	// 服务冷启动时强制清场残留并重置模组语音底座
+	ResetQDC507VoiceRoute()
 
 	return m
+}
+
+// SetNotifier 动态更新或注入系统通知管理器
+func (m *Manager) SetNotifier(n CallNotifier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifier = n
 }
 
 // GetStatus 获取当前通话状态
@@ -197,6 +233,46 @@ func (m *Manager) Answer(ctx context.Context) (*CallSession, error) {
 	return m.currentCall, nil
 }
 
+// StartRecording 手动开启当前通话的双向录音
+func (m *Manager) StartRecording(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.currentCall == nil || m.currentCall.State == CallStateIdle || m.currentCall.State == CallStateTerminated {
+		return fmt.Errorf("当前没有进行中的通话，无法开启录音")
+	}
+	if m.recorder == nil {
+		return fmt.Errorf("录音引擎未就绪")
+	}
+	if err := m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber); err != nil {
+		return err
+	}
+	m.currentCall.IsRecording = true
+	m.broadcastEventLocked("recording_change", m.currentCall, "已开启录音")
+	return nil
+}
+
+// StopRecording 手动停止当前通话的录音
+func (m *Manager) StopRecording(ctx context.Context) (string, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.currentCall == nil {
+		return "", 0, fmt.Errorf("当前无通话")
+	}
+	if m.recorder == nil || !m.recorder.IsRunning() {
+		return "", 0, nil
+	}
+	relFile, size, err := m.recorder.Stop()
+	m.currentCall.IsRecording = false
+	if relFile != "" && size > 0 {
+		m.currentCall.RecordingFile = relFile
+		m.currentCall.RecordingSize = size
+	}
+	m.broadcastEventLocked("recording_change", m.currentCall, "已停止录音")
+	return relFile, size, err
+}
+
 // Hangup 挂断通话
 func (m *Manager) Hangup(ctx context.Context) error {
 	m.mu.Lock()
@@ -205,15 +281,31 @@ func (m *Manager) Hangup(ctx context.Context) error {
 	return m.hangupLocked("user_hangup")
 }
 
+func (m *Manager) stopCallTrackerLocked() {
+	m.trackerMu.Lock()
+	defer m.trackerMu.Unlock()
+	if m.stopTracker != nil {
+		select {
+		case <-m.stopTracker:
+		default:
+			close(m.stopTracker)
+		}
+		m.stopTracker = nil
+	}
+}
+
 func (m *Manager) hangupLocked(reason string) error {
 	if m.currentCall == nil || m.currentCall.State == CallStateTerminated {
 		return nil // 幂等保护：已结束则直接返回
 	}
 
-	// 如果不是由串口URC触发的挂断，才发送 ATH 指令
-	if reason != "no_carrier" && reason != "busy" && reason != "no_answer" && reason != "remote_canceled" {
-		_, _ = m.serialCtrl.Execute("ATH", 4*time.Second)
-	}
+	// 1. 立即终止后台 CLCC 轮询协程，释放串口总线
+	m.stopCallTrackerLocked()
+
+	// 2. 发送 3GPP 标准 VoLTE 挂断指令 AT+CHUP（异步执行，避免持有全局锁阻塞）
+	go func() {
+		_, _ = m.serialCtrl.Execute("AT+CHUP", 2*time.Second)
+	}()
 
 	now := time.Now()
 	m.currentCall.State = CallStateTerminated
@@ -222,6 +314,50 @@ func (m *Manager) hangupLocked(reason string) error {
 	if m.currentCall.ConnectedAt != nil {
 		m.currentCall.DurationSec = int64(now.Sub(*m.currentCall.ConnectedAt).Seconds())
 	}
+
+	// 3. 停止录音并获取落盘文件信息 (若中途手动停止过则复用已落盘文件，若挂断前还在录则自动停止)
+	var recFile string = m.currentCall.RecordingFile
+	var recSize int64 = m.currentCall.RecordingSize
+	if m.recorder != nil && m.recorder.IsRunning() {
+		if rf, rs, err := m.recorder.Stop(); err == nil && rf != "" && rs > 0 {
+			recFile = rf
+			recSize = rs
+		}
+	}
+
+	// 异步持久化通话历史记录与录音元数据
+	go func(call CallSession, endTime time.Time, rf string, rs int64) {
+		startTime := time.Now()
+		if call.StartedAt != nil {
+			startTime = *call.StartedAt
+		}
+		record := db.CallRecord{
+			SessionID:     call.ID,
+			DeviceID:      call.DeviceID,
+			RemoteNumber:  call.RemoteNumber,
+			Direction:     string(call.Direction),
+			DurationSec:   int(call.DurationSec),
+			HangupReason:  call.HangupReason,
+			HasRecording:  rf != "" && rs > 0,
+			RecordingFile: rf,
+			RecordingSize: rs,
+			StartedAt:     startTime,
+			ConnectedAt:   call.ConnectedAt,
+			EndedAt:       endTime,
+		}
+		if call.ConnectedAt != nil {
+			record.State = "completed"
+		} else if call.Direction == DirectionInbound {
+			record.State = "missed"
+		} else if call.HangupReason == "busy" {
+			record.State = "busy"
+		} else {
+			record.State = "canceled"
+		}
+		if err := db.SaveCallRecord(&record); err != nil {
+			logger.Warn("保存通话记录失败", "err", err)
+		}
+	}(*m.currentCall, now, recFile, recSize)
 
 	_ = m.audioBridge.Close()
 	m.webrtcGW.Close()
@@ -309,6 +445,43 @@ func (m *Manager) OnIncomingCall(deviceID, remoteNumber string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 1. 同一通呼入振铃防抖去重：
+	// 基带在未接通振铃期间，会每隔 2~4 秒周期性上报一次 RING 与 +CLIP。
+	// 若当前呼入已处于振铃状态且未超时（90秒内），说明属于同一次来电，忽略重复上报，确保单次呼叫仅通知一次。
+	if m.currentCall != nil &&
+		m.currentCall.Direction == DirectionInbound &&
+		m.currentCall.State == CallStateRinging {
+		if m.currentCall.StartedAt != nil && time.Since(*m.currentCall.StartedAt) < 90*time.Second {
+			// 若之前为未知号码，本次提供了号码，补充更新并广播
+			if (m.currentCall.RemoteNumber == "" || m.currentCall.RemoteNumber == "未知号码") && remoteNumber != "" && remoteNumber != "未知号码" {
+				m.currentCall.RemoteNumber = remoteNumber
+				m.broadcastEventLocked("incoming", m.currentCall, "收到来电: "+remoteNumber)
+				if m.notifier != nil {
+					callee := "--"
+					if m.pool != nil {
+						if w := m.pool.GetWorker(deviceID); w != nil {
+							if imsi := w.GetIMSI(); imsi != "" {
+								if phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi); err == nil && strings.TrimSpace(phone) != "" {
+									callee = strings.TrimSpace(phone)
+								}
+							}
+						}
+					}
+					notifier := m.notifier
+					go func(dev, caller, target string) {
+						notifier.NotifyIncomingCall(dev, caller, target)
+					}(deviceID, remoteNumber, callee)
+				}
+			}
+			return
+		}
+	}
+
+	// 2. 若当前已接通活跃，也忽略后续上报
+	if m.currentCall != nil && m.currentCall.State == CallStateActive {
+		return
+	}
+
 	now := time.Now()
 	session := &CallSession{
 		ID:           uuid.New().String(),
@@ -320,11 +493,52 @@ func (m *Manager) OnIncomingCall(deviceID, remoteNumber string) {
 	}
 	m.currentCall = session
 	m.broadcastEventLocked("incoming", session, "收到来电: "+remoteNumber)
+
+	// 启动通话状态追踪
+	m.startCallTracker(session.ID)
+
+	// 3. 异步向系统告警通知渠道（QQ机器人、Telegram、飞书、Webhook、Bark等）推送来电提醒
+	if m.notifier != nil {
+		callee := "--"
+		if m.pool != nil {
+			if w := m.pool.GetWorker(deviceID); w != nil {
+				if imsi := w.GetIMSI(); imsi != "" {
+					if phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi); err == nil && strings.TrimSpace(phone) != "" {
+						callee = strings.TrimSpace(phone)
+					}
+				}
+			}
+		}
+		notifier := m.notifier
+		go func(dev, caller, target string) {
+			notifier.NotifyIncomingCall(dev, caller, target)
+		}(deviceID, remoteNumber, callee)
+	}
 }
 func (m *Manager) handleSerialHangup(reason string) {
 	go func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+
+		if m.currentCall == nil || m.currentCall.State == CallStateTerminated {
+			return
+		}
+
+		// 呼出时被拒接 (BUSY)：保留 4 秒播放运营商早媒体提示音 ("您拨叫的用户正忙...")
+		if reason == "busy" && m.currentCall.Direction == DirectionOutbound && m.currentCall.State != CallStateActive {
+			sessID := m.currentCall.ID
+			m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+			go func(id string) {
+				time.Sleep(4 * time.Second)
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if m.currentCall != nil && m.currentCall.ID == id {
+					_ = m.hangupLocked("busy")
+				}
+			}(sessID)
+			return
+		}
+
 		_ = m.hangupLocked(reason)
 	}()
 }
@@ -367,6 +581,19 @@ func (m *Manager) startCallTracker(sessID string) {
 				if strings.Contains(resp, "NO CARRIER") || strings.Contains(resp, "BUSY") {
 					m.mu.Lock()
 					if m.currentCall != nil && m.currentCall.ID == sessID {
+						if m.currentCall.Direction == DirectionOutbound && m.currentCall.State != CallStateActive {
+							m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+							go func(id string) {
+								time.Sleep(4 * time.Second)
+								m.mu.Lock()
+								defer m.mu.Unlock()
+								if m.currentCall != nil && m.currentCall.ID == id {
+									_ = m.hangupLocked("busy")
+								}
+							}(sessID)
+							m.mu.Unlock()
+							return
+						}
 						_ = m.hangupLocked("busy")
 					}
 					m.mu.Unlock()
@@ -405,16 +632,27 @@ func (m *Manager) startCallTracker(sessID string) {
 				if matchedEntry == nil {
 					// 我们的通话已不在活跃列表中！
 					emptyCount++
-					if emptyCount >= 2 {
+					if emptyCount >= 3 {
 						m.mu.Lock()
 						if m.currentCall != nil && m.currentCall.ID == sessID {
 							reason := "call_ended"
 							if m.currentCall.Direction == DirectionInbound && m.currentCall.State == CallStateRinging {
 								reason = "remote_canceled"
+								_ = m.hangupLocked(reason)
 							} else if m.currentCall.Direction == DirectionOutbound && (m.currentCall.State == CallStateDialing || m.currentCall.State == CallStateRinging) {
 								reason = "busy"
+								m.broadcastEventLocked("state_change", m.currentCall, "对方拒接或占线")
+								go func(id string) {
+									time.Sleep(4 * time.Second)
+									m.mu.Lock()
+									defer m.mu.Unlock()
+									if m.currentCall != nil && m.currentCall.ID == id {
+										_ = m.hangupLocked("busy")
+									}
+								}(sessID)
+							} else {
+								_ = m.hangupLocked(reason)
 							}
-							_ = m.hangupLocked(reason)
 						}
 						m.mu.Unlock()
 						return
@@ -431,9 +669,13 @@ func (m *Manager) startCallTracker(sessID string) {
 					case 0:
 						if m.currentCall.State != CallStateActive {
 							m.currentCall.State = CallStateActive
+							now := time.Now()
+							if m.currentCall.ConnectedAt == nil {
+								m.currentCall.ConnectedAt = &now
+							}
 							m.broadcastEventLocked("connected", m.currentCall, "")
 						}
-					case 3:
+					case 3, 4, 5:
 						if m.currentCall.State != CallStateRinging {
 							m.currentCall.State = CallStateRinging
 							m.broadcastEventLocked("state_change", m.currentCall, "Ringing")

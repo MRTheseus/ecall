@@ -32,9 +32,19 @@ func (c *PushplusChannel) Send(text string) error {
 }
 
 func (c *PushplusChannel) SendWithContext(ctx NotificationContext) error {
-	title := fmt.Sprintf("[Vohive] %s", ctx.Event)
+	eventTitle := ctx.Event
+	switch ctx.Event {
+	case "sms_received":
+		eventTitle = "收到新短信"
+	case "incoming_call":
+		eventTitle = "来电通知"
+	case "ip_rotated":
+		eventTitle = "公网 IP 切换"
+	}
+
+	title := fmt.Sprintf("[Ecall] %s", eventTitle)
 	if label := ctx.DeviceLabel(); label != "未知设备" {
-		title = fmt.Sprintf("[Vohive] %s - %s", ctx.Event, label)
+		title = fmt.Sprintf("[Ecall] %s - %s", eventTitle, label)
 	}
 
 	payload := map[string]interface{}{

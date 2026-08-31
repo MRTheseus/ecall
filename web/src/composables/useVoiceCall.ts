@@ -7,6 +7,7 @@ export interface CallSession {
   remote_number: string
   direction: 'inbound' | 'outbound'
   state: 'idle' | 'dialing' | 'ringing' | 'active' | 'terminated'
+  is_recording?: boolean
   started_at?: string
   connected_at?: string
   ended_at?: string
@@ -33,6 +34,80 @@ let heartbeatTimer: any = null
 let durationTimer: any = null
 let resetTimer: any = null
 let isWebRTCStarting = false
+
+// 标准 ITU-T 双音多频 (DTMF) 频率表 (Hz)
+const DTMF_FREQS: Record<string, [number, number]> = {
+  '1': [697, 1209],
+  '2': [697, 1336],
+  '3': [697, 1477],
+  '4': [770, 1209],
+  '5': [770, 1336],
+  '6': [770, 1477],
+  '7': [852, 1209],
+  '8': [852, 1336],
+  '9': [852, 1477],
+  '*': [941, 1209],
+  '0': [941, 1336],
+  '#': [941, 1477]
+}
+
+let dtmfAudioCtx: AudioContext | null = null
+const isKeyToneEnabled = ref<boolean>(typeof window !== 'undefined' ? localStorage.getItem('ecall_key_tone') !== 'false' : true)
+
+function toggleKeyTone() {
+  isKeyToneEnabled.value = !isKeyToneEnabled.value
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('ecall_key_tone', String(isKeyToneEnabled.value))
+  }
+}
+
+/**
+ * 播放逼真的手机拨号标准 DTMF 按键音
+ * 纯本地 Web Audio API 独立输出，与 WebRTC 媒体流完全隔离，绝不影响通话
+ */
+function playDTMFTone(digit: string, durationMs: number = 100) {
+  if (!isKeyToneEnabled.value || typeof window === 'undefined') return
+  const freqs = DTMF_FREQS[digit]
+  if (!freqs) return
+
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (!AudioContextClass) return
+
+    if (!dtmfAudioCtx) {
+      dtmfAudioCtx = new AudioContextClass()
+    } else if (dtmfAudioCtx.state === 'suspended') {
+      dtmfAudioCtx.resume().catch(() => {})
+    }
+
+    const now = dtmfAudioCtx.currentTime
+    const duration = durationMs / 1000
+
+    // 主增益与指数淡出（防爆音）
+    const masterGain = dtmfAudioCtx.createGain()
+    masterGain.gain.setValueAtTime(0.12, now)
+    masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration)
+    masterGain.connect(dtmfAudioCtx.destination)
+
+    // 低频正弦波
+    const osc1 = dtmfAudioCtx.createOscillator()
+    osc1.type = 'sine'
+    osc1.frequency.setValueAtTime(freqs[0], now)
+    osc1.connect(masterGain)
+    osc1.start(now)
+    osc1.stop(now + duration)
+
+    // 高频正弦波
+    const osc2 = dtmfAudioCtx.createOscillator()
+    osc2.type = 'sine'
+    osc2.frequency.setValueAtTime(freqs[1], now)
+    osc2.connect(masterGain)
+    osc2.start(now)
+    osc2.stop(now + duration)
+  } catch (e) {
+    console.debug('播放 DTMF 失败', e)
+  }
+}
 
 export function useVoiceCall() {
   const isInCall = computed(() => {
@@ -173,20 +248,25 @@ export function useVoiceCall() {
         }
         resetTimer = null
       }, 1500)
-    } else if (event.type === 'connected' || (event.type === 'state_change' && event.session?.state === 'active')) {
-      // 呼叫已接通
+    } else if (event.type === 'connected') {
+      // 呼叫首次接通 (仅由 CLCC 接通事件触发一次)
       startWebRTC()
+    } else if (event.type === 'recording_change' && event.session) {
+      // 录音状态变更事件：仅同步录音状态，坚决不重新协商 WebRTC
+      if (currentSession.value) {
+        currentSession.value.is_recording = event.session.is_recording
+      }
     }
   }
 
   // 启动 WebRTC 双向音频流
   async function startWebRTC() {
     ensureAudioElement()
-    // 防重入互斥锁：如果正在建立，或者连接已经处于正常活动状态，直接复用跳过
+    // 防重入互斥锁：只要正在建立或已存在有效 PeerConnection，坚决不重复创建
     if (isWebRTCStarting) {
       return
     }
-    if (peerConnection.value && ['connecting', 'connected'].includes(peerConnection.value.connectionState)) {
+    if (peerConnection.value && !['failed', 'closed'].includes(peerConnection.value.connectionState)) {
       return
     }
     isWebRTCStarting = true
@@ -215,12 +295,13 @@ export function useVoiceCall() {
         throw new Error('当前浏览器不支持 mediaDevices.getUserMedia')
       }
 
-      // 1. 获取麦克风音频
+      // 1. 获取麦克风音频 (禁用 AGC 自动增益，防止说话时底噪被剧烈放大产生跟随抽吸电流声)
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: false,
+          channelCount: 1
         },
         video: false
       })
@@ -232,12 +313,11 @@ export function useVoiceCall() {
         })
       }
 
-      // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器与 Google 备用)
+      // 2. 创建 PeerConnection (配置国内低延迟 STUN 服务器)
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.qq.com:3478' },
-          { urls: 'stun:stun.miwifi.com:3478' },
-          { urls: 'stun:stun.l.google.com:19302' }
+          { urls: 'stun:stun.miwifi.com:3478' }
         ]
       })
       peerConnection.value = pc
@@ -326,6 +406,8 @@ export function useVoiceCall() {
       ElMessage.warning('请输入要拨打的电话号码')
       return
     }
+    clearTimeout(resetTimer)
+    ensureAudioElement()
 
     try {
       const res = await fetch('/api/voice/dial', {
@@ -354,6 +436,7 @@ export function useVoiceCall() {
 
   // 接听
   async function answer() {
+    ensureAudioElement()
     try {
       const res = await fetch('/api/voice/answer', {
         method: 'POST',
@@ -391,10 +474,45 @@ export function useVoiceCall() {
       }
       clearTimeout(resetTimer)
       resetTimer = setTimeout(() => {
-        currentSession.value = null
+        if (currentSession.value?.state === 'terminated') {
+          currentSession.value = null
+        }
       }, 1000)
     } catch (err: any) {
       ElMessage.error(err.message || '挂断失败')
+    }
+  }
+
+  // 手动开启/停止录音
+  async function toggleRecording() {
+    if (!currentSession.value || currentSession.value.state !== 'active') {
+      ElMessage.warning('仅在通话接通后支持录音')
+      return
+    }
+
+    const isRec = !!currentSession.value.is_recording
+    const action = isRec ? 'stop' : 'start'
+    try {
+      const res = await fetch(`/api/voice/recording/${action}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token') || ''}`
+        }
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || (isRec ? '停止录音失败' : '开启录音失败'))
+      }
+      if (isRec) {
+        currentSession.value.is_recording = false
+        ElMessage.success('已停止录音并保存')
+      } else {
+        currentSession.value.is_recording = true
+        ElMessage.success('已开始通话双向录音')
+      }
+    } catch (e: any) {
+      ElMessage.error(e.message || '操作录音失败')
     }
   }
 
@@ -454,7 +572,10 @@ export function useVoiceCall() {
   })
 
   onUnmounted(() => {
-    releaseMedia()
+    // 活跃通话中切换页面不销毁媒体连接
+    if (!isInCall.value) {
+      releaseMedia()
+    }
   })
 
   return {
@@ -463,9 +584,14 @@ export function useVoiceCall() {
     isIncoming,
     isMuted,
     isConnecting,
+    isRecording: computed(() => !!currentSession.value?.is_recording),
+    isKeyToneEnabled,
+    toggleKeyTone,
+    playDTMFTone,
     dial,
     answer,
     hangup,
+    toggleRecording,
     sendDTMF,
     toggleMute,
     connectWebSocket

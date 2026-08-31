@@ -41,13 +41,11 @@ const guideOpen = ref(false)
 const DebugPanel = defineAsyncComponent(() => import('../components/DebugPanel.vue'))
 
 const menuItems = [
-  { index: '/', label: '仪表盘', icon: Board24Regular },
-  { index: '/devices', label: '设备管理', icon: Phone24Regular },
-  { index: '/voice', label: '电话拨号', icon: Call24Regular },
-  { index: '/proxy', label: '代理管理', icon: Globe24Regular },
-  { index: '/sms', label: '短信中心', icon: Mail24Regular },
-  { index: '/logs', label: '实时日志', icon: DocumentText24Regular },
-  { index: '/settings', label: '系统设置', icon: Settings24Regular }
+  { index: '/', label: '仪表盘', shortLabel: '仪表盘', icon: Board24Regular },
+  { index: '/devices', label: '设备管理', shortLabel: '设备', icon: Phone24Regular },
+  { index: '/voice', label: '电话拨号', shortLabel: '电话', icon: Call24Regular },
+  { index: '/sms', label: '短信中心', shortLabel: '短信', icon: Mail24Regular },
+  { index: '/settings', label: '系统设置', shortLabel: '设置', icon: Settings24Regular }
 ]
 
 async function handleLogout() {
@@ -136,9 +134,15 @@ const activePath = computed(() => route.path)
       class="h-full ui-glass transition-[width] duration-200 relative sidebar-shell"
     >
       <div class="h-14 px-4 flex items-center" :class="collapsed ? 'justify-center px-0' : ''">
-        <div class="sidebar-brand-icon">V</div>
+        <div class="sidebar-brand-icon">
+          <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6.5C4 5.12 5.12 4 6.5 4H7.8C8.5 4 9.1 4.5 9.25 5.2L9.9 8.2C10 8.7 9.8 9.3 9.4 9.6L8.1 10.7C9.2 13.1 10.9 14.8 13.3 15.9L14.4 14.6C14.7 14.2 15.3 14 15.8 14.1L18.8 14.75C19.5 14.9 20 15.5 20 16.2V17.5C20 18.88 18.88 20 17.5 20C10.04 20 4 13.96 4 6.5Z" fill="currentColor"/>
+            <path d="M14 4C17.31 4 20 6.69 20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14 7.5C15.93 7.5 17.5 9.07 17.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
         <div v-if="!collapsed" class="ml-3">
-          <div class="sidebar-brand-title">VoHive</div>
+          <div class="sidebar-brand-title">Ecall</div>
         </div>
       </div>
 
@@ -174,9 +178,15 @@ const activePath = computed(() => route.path)
     <el-drawer v-model="drawerOpen" direction="ltr" size="256px" :with-header="false" class="mobile-drawer">
       <div class="h-full bg-white/95 dark:bg-[#141418]/95 backdrop-blur-md relative sidebar-shell">
         <div class="h-16 px-4 flex items-center">
-          <div class="sidebar-brand-icon">V</div>
+          <div class="sidebar-brand-icon">
+            <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 6.5C4 5.12 5.12 4 6.5 4H7.8C8.5 4 9.1 4.5 9.25 5.2L9.9 8.2C10 8.7 9.8 9.3 9.4 9.6L8.1 10.7C9.2 13.1 10.9 14.8 13.3 15.9L14.4 14.6C14.7 14.2 15.3 14 15.8 14.1L18.8 14.75C19.5 14.9 20 15.5 20 16.2V17.5C20 18.88 18.88 20 17.5 20C10.04 20 4 13.96 4 6.5Z" fill="currentColor"/>
+              <path d="M14 4C17.31 4 20 6.69 20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M14 7.5C15.93 7.5 17.5 9.07 17.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
           <div class="ml-3">
-            <div class="sidebar-brand-title">VoHive</div>
+            <div class="sidebar-brand-title">Ecall</div>
           </div>
         </div>
 
@@ -212,13 +222,25 @@ const activePath = computed(() => route.path)
 
     <el-container class="h-full">
       <el-header class="h-14 px-4 sm:px-5 flex items-center justify-between ui-glass border-b border-gray-100 dark:border-white/5 sticky top-0 z-10">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2.5">
           <el-button text @click="handleNavToggle" class="!px-2">
-            <el-icon>
+            <el-icon :size="18">
               <Fold v-if="!isMobile && !collapsed" />
               <Expand v-else />
             </el-icon>
           </el-button>
+
+          <!-- 移动端顶部标题与图标 -->
+          <div v-if="isMobile" class="flex items-center gap-2">
+            <div class="sidebar-brand-icon !w-7 !h-7 !rounded-lg">
+              <svg class="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 6.5C4 5.12 5.12 4 6.5 4H7.8C8.5 4 9.1 4.5 9.25 5.2L9.9 8.2C10 8.7 9.8 9.3 9.4 9.6L8.1 10.7C9.2 13.1 10.9 14.8 13.3 15.9L14.4 14.6C14.7 14.2 15.3 14 15.8 14.1L18.8 14.75C19.5 14.9 20 15.5 20 16.2V17.5C20 18.88 18.88 20 17.5 20C10.04 20 4 13.96 4 6.5Z" fill="currentColor"/>
+                <path d="M14 4C17.31 4 20 6.69 20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M14 7.5C15.93 7.5 17.5 9.07 17.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span class="font-bold text-gray-800 dark:text-gray-200 text-sm tracking-tight">VoHive Ecall</span>
+          </div>
         </div>
 
         <div class="flex items-center gap-2 sm:gap-2.5">
@@ -246,7 +268,7 @@ const activePath = computed(() => route.path)
         </div>
       </el-header>
 
-      <el-main class="p-4 sm:p-6 overflow-auto bg-gray-50/50 dark:bg-transparent">
+      <el-main class="p-4 sm:p-6 overflow-auto bg-gray-50/50 dark:bg-transparent" :class="{ '!pb-24': isMobile }">
         <div class="main-inner mx-auto w-full">
           <router-view v-slot="{ Component, route: r }">
             <ErrorBoundary v-if="Component" title="页面渲染失败">
@@ -257,6 +279,29 @@ const activePath = computed(() => route.path)
         </div>
       </el-main>
     </el-container>
+
+    <!-- 手机浏览器底部专属轻量悬浮导航栏 (拇指秒切) -->
+    <nav
+      v-if="isMobile"
+      class="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-[#13141b]/95 backdrop-blur-xl border-t border-gray-200/80 dark:border-white/10 px-1.5 py-1.5 flex items-center justify-around shadow-2xl select-none"
+    >
+      <router-link
+        v-for="item in menuItems"
+        :key="item.index"
+        :to="item.index"
+        class="flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl text-[11px] font-medium transition-all"
+        :class="[
+          activePath === item.index
+            ? 'text-indigo-600 dark:text-indigo-400 font-bold scale-105 bg-indigo-50/70 dark:bg-indigo-950/40'
+            : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 active:scale-95'
+        ]"
+      >
+        <el-icon :size="20" class="mb-0.5">
+          <component :is="item.icon" />
+        </el-icon>
+        <span class="leading-none tracking-tight">{{ item.shortLabel || item.label }}</span>
+      </router-link>
+    </nav>
 
     <DebugPanel v-model="debugOpen" />
     <IncomingCallModal />

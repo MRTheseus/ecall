@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -64,14 +65,48 @@ func detectALSADevice() string {
 	return "hw:0,0"
 }
 
+// stopCmdSync 同步终止进程并等待其释放声卡句柄
+func stopCmdSync(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		logger.Warn("等待 ALSA 进程退出超时", "pid", cmd.Process.Pid)
+	}
+}
+
 // Open 打开音频通路：启动 arecord 下行采集 与 aplay 上行放音
 func (ab *AudioBridge) Open(ctx context.Context) error {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	if ab.recCmd != nil && ab.recCmd.Process != nil && ab.source != nil {
-		logger.Info("AudioBridge 已经处于打开状态，跳过重复初始化")
-		return nil
+	// 1. 彻底清理旧资源并等待进程完全退出，释放 ALSA 物理句柄
+	if ab.cancelFunc != nil {
+		ab.cancelFunc()
+		ab.cancelFunc = nil
+	}
+	if ab.source != nil {
+		_ = ab.source.Close()
+		ab.source = nil
+	}
+	if ab.sink != nil {
+		_ = ab.sink.Close()
+		ab.sink = nil
+	}
+	if ab.recCmd != nil {
+		stopCmdSync(ab.recCmd)
+		ab.recCmd = nil
+	}
+	if ab.playCmd != nil {
+		stopCmdSync(ab.playCmd)
+		ab.playCmd = nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -82,40 +117,51 @@ func (ab *AudioBridge) Open(ctx context.Context) error {
 
 	logger.Info("AudioBridge 正在启动 ALSA 双向音频管道", "alsa_device", dev)
 
-	// 1. 启动 arecord 录音子进程 (模组 ➔ WebRTC 听筒)，配置 20ms 硬件周期以消除缓冲延迟
-	recCmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=80000")
-	recStdout, err := recCmd.StdoutPipe()
-	if err != nil {
-		logger.Warn("创建 arecord 管道失败", "err", err)
-	} else if err := recCmd.Start(); err != nil {
-		logger.Warn("启动 arecord 录音进程失败", "err", err)
-	} else {
-		logger.Info("arecord 下行录音进程已就绪", "pid", recCmd.Process.Pid)
-		ab.recCmd = recCmd
-		ab.source = recStdout
+	// 1. 启动 arecord 录音子进程 (带轻度重试与存活检测)
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.CommandContext(ctx, "arecord", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			logger.Warn("创建 arecord 管道失败", "attempt", attempt, "err", err)
+		} else if err := cmd.Start(); err != nil {
+			logger.Warn("启动 arecord 录音进程失败", "attempt", attempt, "err", err)
+			time.Sleep(100 * time.Millisecond)
+		} else {
+			// 短暂等待检测进程是否由于设备占用而立即夭折
+			time.Sleep(50 * time.Millisecond)
+			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+				logger.Warn("arecord 启动后立即退出，重试", "attempt", attempt)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			ab.recCmd = cmd
+			ab.source = stdout
+			logger.Info("arecord 下行录音进程已就绪", "pid", cmd.Process.Pid, "attempt", attempt)
+			break
+		}
 	}
 
-	// 2. 启动 aplay 放音子进程 (麦克风 ➔ 模组基带 ➔ 对方手机)，配置 20ms 硬件周期
-	playCmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=80000")
-	playStdin, err := playCmd.StdinPipe()
-	if err != nil {
-		logger.Warn("创建 aplay 管道失败", "err", err)
-	} else if err := playCmd.Start(); err != nil {
-		logger.Warn("启动 aplay 放音进程失败", "err", err)
-	} else {
-		logger.Info("aplay 上行放音进程已就绪", "pid", playCmd.Process.Pid)
-		ab.playCmd = playCmd
-		ab.sink = playStdin
-	}
-
-	// 如果声卡子进程启动失败，使用安全管道自环保活
-	if ab.source == nil {
-		r, _ := io.Pipe()
-		ab.source = r
-	}
-	if ab.sink == nil {
-		_, w := io.Pipe()
-		ab.sink = w
+	// 2. 启动 aplay 放音子进程 (带轻度重试与存活检测)
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.CommandContext(ctx, "aplay", "-D", dev, "-f", "S16_LE", "-r", "8000", "-c", "1", "-t", "raw", "--period-time=20000", "--buffer-time=160000")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			logger.Warn("创建 aplay 管道失败", "attempt", attempt, "err", err)
+		} else if err := cmd.Start(); err != nil {
+			logger.Warn("启动 aplay 放音进程失败", "attempt", attempt, "err", err)
+			time.Sleep(100 * time.Millisecond)
+		} else {
+			time.Sleep(50 * time.Millisecond)
+			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+				logger.Warn("aplay 启动后立即退出，重试", "attempt", attempt)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			ab.playCmd = cmd
+			ab.sink = stdin
+			logger.Info("aplay 上行放音进程已就绪", "pid", cmd.Process.Pid, "attempt", attempt)
+			break
+		}
 	}
 
 	return nil
@@ -166,14 +212,12 @@ func (ab *AudioBridge) Close() error {
 		ab.sink = nil
 	}
 
-	if ab.recCmd != nil && ab.recCmd.Process != nil {
-		_ = ab.recCmd.Process.Kill()
-		_ = ab.recCmd.Wait()
+	if ab.recCmd != nil {
+		stopCmdSync(ab.recCmd)
 		ab.recCmd = nil
 	}
-	if ab.playCmd != nil && ab.playCmd.Process != nil {
-		_ = ab.playCmd.Process.Kill()
-		_ = ab.playCmd.Wait()
+	if ab.playCmd != nil {
+		stopCmdSync(ab.playCmd)
 		ab.playCmd = nil
 	}
 

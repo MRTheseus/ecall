@@ -551,6 +551,27 @@ watch(
   }
 )
 
+watch(
+  () => route.query.phone,
+  async (newPhone) => {
+    if (typeof newPhone === 'string' && newPhone.trim()) {
+      const target = newPhone.trim()
+      const cleanTarget = target.replace(/\D/g, '')
+      const matchedThread = threads.value.find(t => {
+        const cleanPeer = t.peer.replace(/\D/g, '')
+        return cleanPeer === cleanTarget || (cleanPeer.length >= 7 && cleanTarget.length >= 7 && (cleanPeer.endsWith(cleanTarget) || cleanTarget.endsWith(cleanPeer)))
+      })
+      if (matchedThread) {
+        void selectThread(matchedThread.key, { syncRoute: true, scrollToBottom: true })
+      } else {
+        sendForm.value.phone = target
+        sendForm.value.message = ''
+        showSendModal.value = true
+      }
+    }
+  }
+)
+
 onMounted(async () => {
   if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
     supportsHover.value = window.matchMedia('(hover: hover) and (pointer: fine)').matches
@@ -571,7 +592,29 @@ onMounted(async () => {
   if (!messagesOk && selectedDevice.value !== initialDevice) {
     await fetchMessages()
   }
-  await ensureThreadSelection({ syncRoute: false, silent: false, scrollToBottom: false })
+
+  const targetPhone = typeof route.query.phone === 'string' ? route.query.phone.trim() : (typeof route.query.peer === 'string' ? route.query.peer.trim() : '')
+  if (targetPhone) {
+    const cleanTarget = targetPhone.replace(/\D/g, '')
+    const matchedThread = threads.value.find(t => {
+      const cleanPeer = t.peer.replace(/\D/g, '')
+      return cleanPeer === cleanTarget || (cleanPeer.length >= 7 && cleanTarget.length >= 7 && (cleanPeer.endsWith(cleanTarget) || cleanTarget.endsWith(cleanPeer)))
+    })
+    if (matchedThread) {
+      await selectThread(matchedThread.key, { syncRoute: true, scrollToBottom: true })
+    } else {
+      sendForm.value.phone = targetPhone
+      sendForm.value.message = ''
+      if (selectedDevice.value && selectedDevice.value !== 'all') {
+        selectedSendDeviceId.value = selectedDevice.value
+      } else if (devices.value[0]?.id) {
+        selectedSendDeviceId.value = devices.value[0].id
+      }
+      showSendModal.value = true
+    }
+  } else {
+    await ensureThreadSelection({ syncRoute: false, silent: false, scrollToBottom: false })
+  }
 })
 
 onUnmounted(() => {

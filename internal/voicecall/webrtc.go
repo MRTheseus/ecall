@@ -21,6 +21,7 @@ type WebRTCGateway struct {
 	peerConn     *webrtc.PeerConnection
 	audioTrack   *webrtc.TrackLocalStaticSample
 	audioBridge  *AudioBridge
+	recorder     *CallRecorder
 	ctx          context.Context
 	cancel       context.CancelFunc
 	onICEGather  func(candidate *webrtc.ICECandidate)
@@ -35,9 +36,10 @@ type WebRTCGateway struct {
 	oggWriter    *oggwriter.OggWriter
 }
 
-func NewWebRTCGateway(bridge *AudioBridge) *WebRTCGateway {
+func NewWebRTCGateway(bridge *AudioBridge, recorder *CallRecorder) *WebRTCGateway {
 	return &WebRTCGateway{
 		audioBridge: bridge,
+		recorder:    recorder,
 	}
 }
 
@@ -71,15 +73,13 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 		webrtc.WithSettingEngine(settingEngine),
 	)
 
-	// 3. 创建 PeerConnection
+	// 3. 创建 PeerConnection (仅使用国内高速低延迟 STUN 节点，避免因 Google STUN 超时导致 1.5s 阻塞)
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{
 					"stun:stun.qq.com:3478",
 					"stun:stun.miwifi.com:3478",
-					"stun:stun.l.google.com:19302",
-					"stun:stun1.l.google.com:19302",
 				},
 			},
 		},
@@ -122,6 +122,9 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 				gw.onDisconnect()
 			}
 		}
+	})
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		logger.Info("WebRTC ICE 状态变更", "iceState", state.String())
 	})
 
 	// 7. 设置 Remote Description
@@ -204,9 +207,16 @@ func (gw *WebRTCGateway) startTranscoders() {
 	gw.downOpusOut = downOut
 	logger.Info("下行 ffmpeg Opus 编码器已启动", "pid", gw.downEncoder.Process.Pid)
 
-	// 启动后台协程: 从 AudioBridge 读取 PCM 并喂给 ffmpeg 编码器
+	// 立即写入 10 帧静音预热 (200ms)，确保 ffmpeg 瞬间吐出合法的 Ogg Header (OpusHead + OpusTags)
+	silenceWarmup := make([]byte, 320*10)
+	_, _ = downIn.Write(silenceWarmup)
+
+	// 双协程解耦: 协程 A 采集声卡 PCM，协程 B 基于 20ms 恒定时钟喂入 FFmpeg
+	pcmChan := make(chan []byte, 50)
+
+	// 协程 A: 采集声卡 PCM (允许在基带未送出音频时阻塞等待)
 	go func() {
-		pcmBuf := make([]byte, 320) // 8kHz 16-bit 20ms = 320 bytes
+		pcmBuf := make([]byte, 320)
 		for {
 			select {
 			case <-ctx.Done():
@@ -214,15 +224,51 @@ func (gw *WebRTCGateway) startTranscoders() {
 			default:
 				n, err := gw.audioBridge.ReadPCM(pcmBuf)
 				if err != nil {
-					if err == io.EOF || ctx.Err() != nil {
+					if ctx.Err() != nil {
 						return
 					}
-					time.Sleep(5 * time.Millisecond)
+					time.Sleep(20 * time.Millisecond)
 					continue
 				}
 				if n > 0 {
-					_, writeErr := downIn.Write(pcmBuf[:n])
-					if writeErr != nil {
+					data := make([]byte, n)
+					copy(data, pcmBuf[:n])
+					select {
+					case pcmChan <- data:
+					case <-ctx.Done():
+						return
+					default:
+						// 缓冲区满时丢弃最旧数据，保证实时性
+					}
+				}
+			}
+		}
+	}()
+
+	// 协程 B: 20ms 恒定时钟喂入 FFmpeg (有声卡数据喂声卡，无声卡数据补静音，确保推流永不饥饿)
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		silence := make([]byte, 320)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var chunk []byte
+				select {
+				case chunk = <-pcmChan:
+				default:
+					chunk = silence
+				}
+
+				if gw.recorder != nil && len(chunk) > 0 {
+					gw.recorder.PushDownstream(chunk)
+				}
+
+				if _, err := downIn.Write(chunk); err != nil {
+					if ctx.Err() != nil {
 						return
 					}
 				}
@@ -236,6 +282,7 @@ func (gw *WebRTCGateway) startTranscoders() {
 		"-c:a", "libopus",
 		"-f", "ogg", "-i", "pipe:0",
 		"-flush_packets", "1",
+		"-af", "aresample=8000:resample_cutoff=0.92,lowpass=f=3800,volume=0.85,alimiter=limit=0.90",
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:1",
 	)
 	upIn, err := gw.upDecoder.StdinPipe()
@@ -275,6 +322,9 @@ func (gw *WebRTCGateway) startTranscoders() {
 					return
 				}
 				if n > 0 {
+					if gw.recorder != nil {
+						gw.recorder.PushUpstream(pcmBuf[:n])
+					}
 					_, _ = gw.audioBridge.WritePCM(pcmBuf[:n])
 				}
 			}
@@ -298,11 +348,15 @@ func (gw *WebRTCGateway) stopTranscoders() {
 		gw.upPCMOut = nil
 	}
 	if gw.downEncoder != nil && gw.downEncoder.Process != nil {
-		_ = gw.downEncoder.Process.Kill()
+		cmd := gw.downEncoder
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		gw.downEncoder = nil
 	}
 	if gw.upDecoder != nil && gw.upDecoder.Process != nil {
-		_ = gw.upDecoder.Process.Kill()
+		cmd := gw.upDecoder
+		_ = cmd.Process.Kill()
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 		gw.upDecoder = nil
 	}
 }
@@ -350,6 +404,7 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		return
 	}
 
+	// 一次性初始化 OggReader (由于预热和 20ms 恒定时钟，Header 必然立即可用)
 	ogg, _, err := oggreader.NewWith(gw.downOpusOut)
 	if err != nil {
 		logger.Warn("初始化 oggreader 失败", "err", err)
@@ -363,10 +418,14 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		default:
 			pageData, _, err := ogg.ParseNextPage()
 			if err != nil {
-				if err == io.EOF || gw.ctx.Err() != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					logger.Debug("下行 Ogg 流已结束 (EOF)")
 					return
 				}
-				time.Sleep(5 * time.Millisecond)
+				if gw.ctx.Err() != nil {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 			if len(pageData) == 0 {

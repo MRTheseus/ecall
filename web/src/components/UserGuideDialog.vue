@@ -13,13 +13,18 @@ import {
   Search20Regular,
   Copy20Regular,
   Checkmark20Regular,
-  ShieldCheckmark20Regular
+  ShieldCheckmark20Regular,
+  DocumentText20Regular
 } from '@vicons/fluent'
 
 const visible = defineModel<boolean>({ default: false })
 const activeTab = ref('quickstart')
 const searchQuery = ref('')
 const copiedCommand = ref<string | null>(null)
+
+function openAPIDocs() {
+  window.open('/swagger/index.html', '_blank')
+}
 
 function copyText(text: string) {
   if (!navigator.clipboard) {
@@ -79,7 +84,7 @@ const faqs = [
   },
   {
     q: 'Q4: SOCKS5 / HTTP 代理连接超时或无法访问特定网站？',
-    a: '1. 端口放行：检查宿主机防火墙（ufw / iptables）是否放行了所配置的代理端口。\n2. 模组出站绑定：VoHive 基于 Linux 内核 `SO_BINDTODEVICE` 机制将代理严格绑定到模组网卡（如 wwan0）。请确保该模组当前已成功获取蜂窝 IP。\n3. DNS 解析：若蜂窝网络提供的 DNS 存在污染或延迟，可尝试在模组设置中配置公共 DNS（如 119.29.29.29 或 8.8.8.8）。'
+    a: '1. 端口放行：检查宿主机防火墙（ufw / iptables）是否放行了所配置的代理端口。\n2. 模组出站绑定：Ecall 基于 Linux 内核 `SO_BINDTODEVICE` 机制将代理严格绑定到模组网卡（如 wwan0）。请确保该模组当前已成功获取蜂窝 IP。\n3. DNS 解析：若蜂窝网络提供的 DNS 存在污染或延迟，可尝试在模组设置中配置公共 DNS（如 119.29.29.29 或 8.8.8.8）。'
   },
   {
     q: 'Q5: 如何实现自动 IP 轮换（切换公网出口 IP）？',
@@ -103,7 +108,7 @@ const filteredAtCommands = computed(() => {
 <template>
   <el-dialog
     v-model="visible"
-    title="VoHive 系统使用指南与操作手册"
+    title="Ecall 系统使用指南与操作手册"
     width="92%"
     class="user-guide-dialog !max-w-4xl !rounded-2xl"
     destroy-on-close
@@ -155,10 +160,10 @@ const filteredAtCommands = computed(() => {
             <div class="p-4 rounded-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent border border-indigo-500/20">
               <h3 class="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
                 <el-icon class="text-indigo-500"><Rocket20Regular /></el-icon>
-                欢迎使用 VoHive
+                欢迎使用 Ecall
               </h3>
               <p class="mt-1 text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
-                VoHive 专为高通/移远 4G/5G 模组（EC20、EC25、EG25、EM20、RM500Q 等）设计，整合模组热插拔管理、独立网卡绑定 SOCKS5/HTTP 代理、短信智能收发、eSIM 全生命周期管理及全渠道告警推送。
+                Ecall 专为高通/移远 4G/5G 模组（EC20、EC25、EG25、EM20、RM500Q 等）设计，整合模组热插拔管理、独立网卡绑定 SOCKS5/HTTP 代理、短信智能收发、eSIM 全生命周期管理及全渠道告警推送。
               </p>
             </div>
 
@@ -251,7 +256,7 @@ const filteredAtCommands = computed(() => {
             </h3>
 
             <div class="text-xs text-gray-600 dark:text-gray-300">
-              VoHive 内置了完整的 AT 指令交互终端，支持常用指令一键发送与原始响应查看：
+              Ecall 内置了完整的 AT 指令交互终端，支持常用指令一键发送与原始响应查看：
             </div>
 
             <div class="space-y-2">
@@ -294,7 +299,7 @@ const filteredAtCommands = computed(() => {
             </h3>
 
             <div class="text-xs text-gray-600 dark:text-gray-300">
-              VoHive 支持直接通过 Modem AT 指令通道对 eSIM 芯片（如 9eSIM、Estk、5ber、LPAC 兼容芯片）执行全生命周期管理：
+              Ecall 支持直接通过 Modem AT 指令通道对 eSIM 芯片（如 9eSIM、Estk、5ber、LPAC 兼容芯片）执行全生命周期管理：
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
@@ -327,7 +332,7 @@ const filteredAtCommands = computed(() => {
             <div class="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200/50 dark:border-indigo-500/20 text-xs space-y-1">
               <div class="font-bold text-indigo-600 dark:text-indigo-400">💡 核心技术原理：`SO_BINDTODEVICE` 强绑网卡</div>
               <div class="text-gray-600 dark:text-gray-300">
-                VoHive 在 Socket 握手层调用 Linux 内核的 <code>SO_BINDTODEVICE</code>，将每个代理端口的 TCP/UDP 连接严格绑定到对应模组的蜂窝网卡上，彻底避免了流量串流与路由混乱，实现真正意义上的「单机多卡、一端口一出口 IP」。
+                Ecall 在 Socket 握手层调用 Linux 内核的 <code>SO_BINDTODEVICE</code>，将每个代理端口的 TCP/UDP 连接严格绑定到对应模组的蜂窝网卡上，彻底避免了流量串流与路由混乱，实现真正意义上的「单机多卡、一端口一出口 IP」。
               </div>
             </div>
 
@@ -435,6 +440,23 @@ const filteredAtCommands = computed(() => {
         </div>
       </div>
     </div>
+
+    <template #footer>
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-gray-400 dark:text-gray-500 w-full pt-2 border-t border-gray-100 dark:border-white/5">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold text-gray-600 dark:text-gray-400">Ecall 蜂窝移动通信与模组控制系统</span>
+          <span>·</span>
+          <span class="font-mono bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full text-[11px] font-bold">v1.0.0</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <el-button size="small" type="primary" plain @click="openAPIDocs">
+            <el-icon class="mr-1"><DocumentText20Regular /></el-icon>
+            OpenAPI 接口文档
+          </el-button>
+          <el-button size="small" @click="visible = false">关闭</el-button>
+        </div>
+      </div>
+    </template>
   </el-dialog>
 </template>
 

@@ -12,12 +12,12 @@ export default defineConfig(({ mode }) => {
     plugins: [
       vue(),
       AutoImport({
-        dts: 'src/auto-imports.d.ts',
+        dts: false,
         imports: ['vue', 'vue-router', 'pinia'],
         resolvers: [ElementPlusResolver({ importStyle: false })]
       }),
       Components({
-        dts: 'src/components.d.ts',
+        dts: false,
         resolvers: [
           ElementPlusResolver({
             importStyle: false

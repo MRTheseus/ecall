@@ -892,6 +892,11 @@ function openSms() {
   router.push(`/sms?device=${selectedId.value}`)
 }
 
+function openVoice() {
+  if (!selectedId.value) return
+  router.push(`/voice?device=${selectedId.value}`)
+}
+
 async function saveConfig() {
   const id = String(selectedId.value || '').trim()
   if (!id || !editConfig.value) return
@@ -1254,6 +1259,7 @@ usePollingScheduler(async () => {
           @reconnect-vowifi="reconnectVoWiFi"
           @reboot-modem="rebootModem"
           @open-sms="openSms"
+          @open-voice="openVoice"
         />
 
         <div class="ui-card p-6">

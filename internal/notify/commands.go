@@ -35,6 +35,30 @@ func unknownCommandReply(command string) string {
 	return fmt.Sprintf("未知命令 / %s\n提示    请检查命令名或使用 /list、/status、/send 等已注册命令", strings.TrimSpace(command))
 }
 
+// SupportedCommandsHelp 返回当前渠道支持的指令列表及简要说明
+func SupportedCommandsHelp(title string) string {
+	var sb strings.Builder
+	if strings.TrimSpace(title) != "" {
+		sb.WriteString(strings.TrimSpace(title))
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("可用的指令列表及说明：\n")
+	sb.WriteString("/list - 查看所有设备概况（信号、内外网IP、卡号）\n")
+	sb.WriteString("/status [设备ID] - 查询指定设备详情与基站网络参数\n")
+	sb.WriteString("/rotate [设备ID] - 切换指定设备的蜂窝公网 IP\n")
+	sb.WriteString("/send [设备ID] [号码] [内容] - 远程发送短信\n")
+	sb.WriteString("/sms [设备ID] - 查询最近收发的 5 条短信\n")
+	sb.WriteString("/esim [设备ID] - 查询设备的 eSIM 配置列表\n")
+	sb.WriteString("/switch [设备ID] [序号/ICCID] - 远程切换 eSIM 卡\n")
+	sb.WriteString("/vocall [设备ID] [号码] [秒数] - 发起测试呼叫\n")
+	sb.WriteString("/help - 显示本命令使用说明")
+	return sb.String()
+}
+
+func (m *Manager) handleCmdHelp(cmdCtx CommandContext, args []string) string {
+	return SupportedCommandsHelp("Ecall 机器人命令指南")
+}
+
 func commandValidationBlock(title string, fields ...string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s / 参数错误", strings.TrimSpace(title)))

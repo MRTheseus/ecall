@@ -138,12 +138,23 @@ func (t *TelegramChannel) Start() error {
 	logger.Info("Telegram Bot 命令监听已启动")
 
 	for update := range updates {
-		if update.Message == nil || !update.Message.IsCommand() {
+		if update.Message == nil {
 			continue
 		}
 
-		// 仅处理来自授权用户的命令
+		// 仅处理来自授权会话的消息
 		if update.Message.Chat.ID != t.chatID {
+			continue
+		}
+
+		isPrivate := update.Message.Chat.IsPrivate()
+
+		// 若不是命令消息：私聊场景回复可用指令列表说明
+		if !update.Message.IsCommand() {
+			if isPrivate {
+				ctx := &tgCommandContext{channel: t}
+				ctx.Reply(SupportedCommandsHelp("当前机器人支持以下指令："))
+			}
 			continue
 		}
 
@@ -155,7 +166,11 @@ func (t *TelegramChannel) Start() error {
 		handler, ok := t.handlers[command]
 		if !ok {
 			ctx := &tgCommandContext{channel: t}
-			ctx.Reply(unknownCommandReply(command))
+			if isPrivate {
+				ctx.Reply(SupportedCommandsHelp(fmt.Sprintf("未知命令 /%s", command)))
+			} else {
+				ctx.Reply(unknownCommandReply(command))
+			}
 			continue
 		}
 

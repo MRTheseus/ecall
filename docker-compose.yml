@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: vohive:latest
     container_name: vohive
-    restart: unless-stopped
+    restart: always
     network_mode: "host" # 推荐使用 Host 模式以便管理 4G 网卡接口
     privileged: true     # 需要访问 USB 设备、网络管理能力与 /dev/net/tun
     volumes:
