@@ -7,6 +7,7 @@ export interface CallSession {
   remote_number: string
   direction: 'inbound' | 'outbound'
   state: 'idle' | 'dialing' | 'ringing' | 'active' | 'terminated'
+  is_recording?: boolean
   started_at?: string
   connected_at?: string
   ended_at?: string
@@ -173,20 +174,25 @@ export function useVoiceCall() {
         }
         resetTimer = null
       }, 1500)
-    } else if (event.type === 'connected' || (event.type === 'state_change' && event.session?.state === 'active')) {
-      // 呼叫已接通
+    } else if (event.type === 'connected') {
+      // 呼叫首次接通 (仅由 CLCC 接通事件触发一次)
       startWebRTC()
+    } else if (event.type === 'recording_change' && event.session) {
+      // 录音状态变更事件：仅同步录音状态，坚决不重新协商 WebRTC
+      if (currentSession.value) {
+        currentSession.value.is_recording = event.session.is_recording
+      }
     }
   }
 
   // 启动 WebRTC 双向音频流
   async function startWebRTC() {
     ensureAudioElement()
-    // 防重入互斥锁：如果正在建立，或者连接已经处于正常活动状态，直接复用跳过
+    // 防重入互斥锁：只要正在建立或已存在有效 PeerConnection，坚决不重复创建
     if (isWebRTCStarting) {
       return
     }
-    if (peerConnection.value && ['connecting', 'connected'].includes(peerConnection.value.connectionState)) {
+    if (peerConnection.value && !['failed', 'closed'].includes(peerConnection.value.connectionState)) {
       return
     }
     isWebRTCStarting = true
@@ -326,6 +332,7 @@ export function useVoiceCall() {
       ElMessage.warning('请输入要拨打的电话号码')
       return
     }
+    clearTimeout(resetTimer)
     ensureAudioElement()
 
     try {
@@ -393,10 +400,45 @@ export function useVoiceCall() {
       }
       clearTimeout(resetTimer)
       resetTimer = setTimeout(() => {
-        currentSession.value = null
+        if (currentSession.value?.state === 'terminated') {
+          currentSession.value = null
+        }
       }, 1000)
     } catch (err: any) {
       ElMessage.error(err.message || '挂断失败')
+    }
+  }
+
+  // 手动开启/停止录音
+  async function toggleRecording() {
+    if (!currentSession.value || currentSession.value.state !== 'active') {
+      ElMessage.warning('仅在通话接通后支持录音')
+      return
+    }
+
+    const isRec = !!currentSession.value.is_recording
+    const action = isRec ? 'stop' : 'start'
+    try {
+      const res = await fetch(`/api/voice/recording/${action}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token') || ''}`
+        }
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || (isRec ? '停止录音失败' : '开启录音失败'))
+      }
+      if (isRec) {
+        currentSession.value.is_recording = false
+        ElMessage.success('已停止录音并保存')
+      } else {
+        currentSession.value.is_recording = true
+        ElMessage.success('已开始通话双向录音')
+      }
+    } catch (e: any) {
+      ElMessage.error(e.message || '操作录音失败')
     }
   }
 
@@ -456,7 +498,10 @@ export function useVoiceCall() {
   })
 
   onUnmounted(() => {
-    releaseMedia()
+    // 活跃通话中切换页面不销毁媒体连接
+    if (!isInCall.value) {
+      releaseMedia()
+    }
   })
 
   return {
@@ -465,9 +510,11 @@ export function useVoiceCall() {
     isIncoming,
     isMuted,
     isConnecting,
+    isRecording: computed(() => !!currentSession.value?.is_recording),
     dial,
     answer,
     hangup,
+    toggleRecording,
     sendDTMF,
     toggleMute,
     connectWebSocket

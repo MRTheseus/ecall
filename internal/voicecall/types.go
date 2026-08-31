@@ -32,11 +32,14 @@ type CallSession struct {
 	RemoteNumber string        `json:"remote_number"`
 	Direction    CallDirection `json:"direction"`
 	State        CallState     `json:"state"`
-	StartedAt    *time.Time    `json:"started_at,omitempty"`
-	ConnectedAt  *time.Time    `json:"connected_at,omitempty"`
-	EndedAt      *time.Time    `json:"ended_at,omitempty"`
-	DurationSec  int64         `json:"duration_sec"`
-	HangupReason string        `json:"hangup_reason,omitempty"`
+	IsRecording   bool          `json:"is_recording"`
+	RecordingFile string        `json:"recording_file,omitempty"`
+	RecordingSize int64         `json:"recording_size,omitempty"`
+	StartedAt     *time.Time    `json:"started_at,omitempty"`
+	ConnectedAt   *time.Time    `json:"connected_at,omitempty"`
+	EndedAt       *time.Time    `json:"ended_at,omitempty"`
+	DurationSec   int64         `json:"duration_sec"`
+	HangupReason  string        `json:"hangup_reason,omitempty"`
 }
 
 // CallEvent 实时推送给前端的通话状态变更事件

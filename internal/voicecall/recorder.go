@@ -38,6 +38,13 @@ func NewCallRecorder() *CallRecorder {
 	return &CallRecorder{}
 }
 
+// IsRunning 查询当前是否正在录音
+func (r *CallRecorder) IsRunning() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running
+}
+
 // getRecordingsBaseDir 获取录音存储物理根目录
 func getRecordingsBaseDir() string {
 	if _, err := os.Stat("/app/data"); err == nil {

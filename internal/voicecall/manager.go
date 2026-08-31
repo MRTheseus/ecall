@@ -229,13 +229,48 @@ func (m *Manager) Answer(ctx context.Context) (*CallSession, error) {
 	_ = m.audioBridge.Open(context.Background())
 	EnsureQDC507VoiceRoute()
 
-	// 启动服务端通话录音
-	if m.recorder != nil {
-		_ = m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber)
-	}
-
 	m.broadcastEventLocked("state_change", m.currentCall, "已接通")
 	return m.currentCall, nil
+}
+
+// StartRecording 手动开启当前通话的双向录音
+func (m *Manager) StartRecording(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.currentCall == nil || m.currentCall.State == CallStateIdle || m.currentCall.State == CallStateTerminated {
+		return fmt.Errorf("当前没有进行中的通话，无法开启录音")
+	}
+	if m.recorder == nil {
+		return fmt.Errorf("录音引擎未就绪")
+	}
+	if err := m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber); err != nil {
+		return err
+	}
+	m.currentCall.IsRecording = true
+	m.broadcastEventLocked("recording_change", m.currentCall, "已开启录音")
+	return nil
+}
+
+// StopRecording 手动停止当前通话的录音
+func (m *Manager) StopRecording(ctx context.Context) (string, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.currentCall == nil {
+		return "", 0, fmt.Errorf("当前无通话")
+	}
+	if m.recorder == nil || !m.recorder.IsRunning() {
+		return "", 0, nil
+	}
+	relFile, size, err := m.recorder.Stop()
+	m.currentCall.IsRecording = false
+	if relFile != "" && size > 0 {
+		m.currentCall.RecordingFile = relFile
+		m.currentCall.RecordingSize = size
+	}
+	m.broadcastEventLocked("recording_change", m.currentCall, "已停止录音")
+	return relFile, size, err
 }
 
 // Hangup 挂断通话
@@ -280,11 +315,14 @@ func (m *Manager) hangupLocked(reason string) error {
 		m.currentCall.DurationSec = int64(now.Sub(*m.currentCall.ConnectedAt).Seconds())
 	}
 
-	// 3. 停止录音并获取落盘文件信息
-	var recFile string
-	var recSize int64
-	if m.recorder != nil {
-		recFile, recSize, _ = m.recorder.Stop()
+	// 3. 停止录音并获取落盘文件信息 (若中途手动停止过则复用已落盘文件，若挂断前还在录则自动停止)
+	var recFile string = m.currentCall.RecordingFile
+	var recSize int64 = m.currentCall.RecordingSize
+	if m.recorder != nil && m.recorder.IsRunning() {
+		if rf, rs, err := m.recorder.Stop(); err == nil && rf != "" && rs > 0 {
+			recFile = rf
+			recSize = rs
+		}
 	}
 
 	// 异步持久化通话历史记录与录音元数据
@@ -634,9 +672,6 @@ func (m *Manager) startCallTracker(sessID string) {
 							now := time.Now()
 							if m.currentCall.ConnectedAt == nil {
 								m.currentCall.ConnectedAt = &now
-							}
-							if m.recorder != nil {
-								_ = m.recorder.Start(m.currentCall.ID, m.currentCall.RemoteNumber)
 							}
 							m.broadcastEventLocked("connected", m.currentCall, "")
 						}

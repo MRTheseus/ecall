@@ -357,6 +357,8 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/voice/dial", s.handleVoiceDial)
 		api.POST("/voice/answer", s.handleVoiceAnswer)
 		api.POST("/voice/hangup", s.handleVoiceHangup)
+		api.POST("/voice/recording/start", s.handleVoiceStartRecording)
+		api.POST("/voice/recording/stop", s.handleVoiceStopRecording)
 		api.POST("/voice/dtmf", s.handleVoiceDTMF)
 		api.POST("/voice/webrtc/offer", s.handleVoiceWebRTCOffer)
 		api.POST("/voice/webrtc/candidate", s.handleVoiceWebRTCCandidate)

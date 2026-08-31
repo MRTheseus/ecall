@@ -22,7 +22,9 @@ import {
   Play24Filled,
   Pause24Filled,
   ArrowDownload24Regular,
-  MusicNote224Regular
+  MusicNote224Regular,
+  Record24Regular,
+  RecordStop24Filled
 } from '@vicons/fluent'
 import { Loading } from '@element-plus/icons-vue'
 
@@ -122,8 +124,10 @@ const {
   isInCall,
   isMuted,
   isConnecting,
+  isRecording,
   dial,
   hangup,
+  toggleRecording,
   sendDTMF,
   toggleMute
 } = useVoiceCall()
@@ -419,8 +423,12 @@ onMounted(() => {
               <h2 class="text-3xl font-mono font-bold text-gray-900 dark:text-white">
                 {{ currentSession.remote_number }}
               </h2>
-              <p class="mt-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                {{ callStatusText }} · {{ formattedDuration }}
+              <p class="mt-2 text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-2">
+                <span>{{ callStatusText }} · {{ formattedDuration }}</span>
+                <span v-if="isRecording" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 animate-pulse">
+                  <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                  录音中
+                </span>
               </p>
               <p v-if="isConnecting" class="mt-1 text-xs text-amber-500 animate-pulse">
                 正在建立 WebRTC 麦克风音频流...
@@ -428,7 +436,7 @@ onMounted(() => {
             </div>
 
             <!-- 通话控制按钮组 -->
-            <div class="flex items-center justify-center gap-6 pt-4">
+            <div class="flex items-center justify-center gap-5 pt-4">
               <!-- 静音麦克风 -->
               <button
                 type="button"
@@ -444,6 +452,27 @@ onMounted(() => {
                 <el-icon :size="24">
                   <MicOff24Filled v-if="isMuted" />
                   <Mic24Regular v-else />
+                </el-icon>
+              </button>
+
+              <!-- 手动双向录音控制 -->
+              <button
+                type="button"
+                :disabled="currentSession.state !== 'active'"
+                @click.stop="toggleRecording"
+                :class="[
+                  'flex h-14 w-14 items-center justify-center rounded-full transition-all active:scale-95 shadow-md select-none',
+                  isRecording
+                    ? 'bg-rose-600 text-white ring-4 ring-rose-300/60 dark:ring-rose-600/60 animate-pulse'
+                    : currentSession.state === 'active'
+                      ? 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 hover:text-rose-500'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-400 opacity-50 cursor-not-allowed'
+                ]"
+                :title="isRecording ? '点击停止录音 (正在录音中)' : '点击开始双向录音'"
+              >
+                <el-icon :size="24">
+                  <RecordStop24Filled v-if="isRecording" />
+                  <Record24Regular v-else />
                 </el-icon>
               </button>
 

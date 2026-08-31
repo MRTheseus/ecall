@@ -84,6 +84,37 @@ func (s *Server) handleVoiceHangup(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+// handleVoiceStartRecording 手动开启录音
+func (s *Server) handleVoiceStartRecording(c *gin.Context) {
+	if s.voiceCallMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "语音呼叫模块未就绪"})
+		return
+	}
+	if err := s.voiceCallMgr.StartRecording(c.Request.Context()); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// handleVoiceStopRecording 手动停止录音
+func (s *Server) handleVoiceStopRecording(c *gin.Context) {
+	if s.voiceCallMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "语音呼叫模块未就绪"})
+		return
+	}
+	relFile, size, err := s.voiceCallMgr.StopRecording(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"recording_file": relFile,
+		"recording_size": size,
+	})
+}
+
 // handleVoiceDTMF 发送按键音
 func (s *Server) handleVoiceDTMF(c *gin.Context) {
 	if s.voiceCallMgr == nil {

@@ -207,39 +207,69 @@ func (gw *WebRTCGateway) startTranscoders() {
 	gw.downOpusOut = downOut
 	logger.Info("下行 ffmpeg Opus 编码器已启动", "pid", gw.downEncoder.Process.Pid)
 
-	// 立即写入 3 帧静音 PCM 预热，确保 ffmpeg 瞬间输出 Ogg Header 与首包
-	silenceWarmup := make([]byte, 320*3)
+	// 立即写入 10 帧静音预热 (200ms)，确保 ffmpeg 瞬间吐出合法的 Ogg Header (OpusHead + OpusTags)
+	silenceWarmup := make([]byte, 320*10)
 	_, _ = downIn.Write(silenceWarmup)
 
-	// 启动后台协程: 从 AudioBridge 读取 PCM 并喂给 ffmpeg 编码器
+	// 双协程解耦: 协程 A 采集声卡 PCM，协程 B 基于 20ms 恒定时钟喂入 FFmpeg
+	pcmChan := make(chan []byte, 50)
+
+	// 协程 A: 采集声卡 PCM (允许在基带未送出音频时阻塞等待)
 	go func() {
-		pcmBuf := make([]byte, 320) // 8kHz 16-bit 20ms = 320 bytes
-		silence := make([]byte, 320)
+		pcmBuf := make([]byte, 320)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 				n, err := gw.audioBridge.ReadPCM(pcmBuf)
-				if err != nil || n == 0 {
+				if err != nil {
 					if ctx.Err() != nil {
 						return
 					}
-					// 声卡暂未产出数据时，持续输入静音包保活，维持 WebRTC 时间戳平滑
-					_, _ = downIn.Write(silence)
 					time.Sleep(20 * time.Millisecond)
 					continue
 				}
 				if n > 0 {
-					if gw.recorder != nil {
-						gw.recorder.PushDownstream(pcmBuf[:n])
+					data := make([]byte, n)
+					copy(data, pcmBuf[:n])
+					select {
+					case pcmChan <- data:
+					case <-ctx.Done():
+						return
+					default:
+						// 缓冲区满时丢弃最旧数据，保证实时性
 					}
-					_, writeErr := downIn.Write(pcmBuf[:n])
-					if writeErr != nil {
-						if ctx.Err() != nil {
-							return
-						}
-						time.Sleep(10 * time.Millisecond)
+				}
+			}
+		}
+	}()
+
+	// 协程 B: 20ms 恒定时钟喂入 FFmpeg (有声卡数据喂声卡，无声卡数据补静音，确保推流永不饥饿)
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		silence := make([]byte, 320)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var chunk []byte
+				select {
+				case chunk = <-pcmChan:
+				default:
+					chunk = silence
+				}
+
+				if gw.recorder != nil && len(chunk) > 0 {
+					gw.recorder.PushDownstream(chunk)
+				}
+
+				if _, err := downIn.Write(chunk); err != nil {
+					if ctx.Err() != nil {
+						return
 					}
 				}
 			}
@@ -247,11 +277,6 @@ func (gw *WebRTCGateway) startTranscoders() {
 	}()
 
 	// 上行解码器: Opus → PCM 8kHz S16_LE (浏览器麦克风 Opus → ffmpeg → AudioBridge)
-	// 音频增强流水线:
-	// 1. aresample=8000:resample_cutoff=0.92 : 高阶重采样滤波
-	// 2. lowpass=f=3800 : 滤除 3.8kHz 以上高频分量，彻底杜绝 8kHz 降采样混叠与高频毛刺
-	// 3. volume=0.85 : 预留安全电平动态余量 (-1.4dB)
-	// 4. alimiter=limit=0.90 : 峰值限幅保护，杜绝说话时数字硬削顶破音
 	gw.upDecoder = exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner", "-loglevel", "error",
 		"-c:a", "libopus",
@@ -379,21 +404,10 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		return
 	}
 
-	var ogg *oggreader.OggReader
-	for attempt := 1; attempt <= 20; attempt++ {
-		if gw.ctx.Err() != nil {
-			return
-		}
-		reader, _, err := oggreader.NewWith(gw.downOpusOut)
-		if err == nil {
-			ogg = reader
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	if ogg == nil {
-		logger.Warn("初始化 oggreader 失败 (超时)")
+	// 一次性初始化 OggReader (由于预热和 20ms 恒定时钟，Header 必然立即可用)
+	ogg, _, err := oggreader.NewWith(gw.downOpusOut)
+	if err != nil {
+		logger.Warn("初始化 oggreader 失败", "err", err)
 		return
 	}
 
@@ -404,6 +418,10 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 		default:
 			pageData, _, err := ogg.ParseNextPage()
 			if err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					logger.Debug("下行 Ogg 流已结束 (EOF)")
+					return
+				}
 				if gw.ctx.Err() != nil {
 					return
 				}
