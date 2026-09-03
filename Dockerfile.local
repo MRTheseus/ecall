@@ -1,0 +1,9 @@
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata alsa-utils ffmpeg android-tools
+WORKDIR /app
+COPY vohive_bin /app/server
+COPY module_voice /app/module_voice
+COPY config /app/config
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/server /app/docker-entrypoint.sh && mkdir -p /app/data /app/config /app/logs
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

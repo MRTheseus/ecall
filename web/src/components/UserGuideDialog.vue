@@ -172,7 +172,7 @@ const filteredAtCommands = computed(() => {
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                 <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
                   <div class="font-bold text-indigo-600 dark:text-indigo-400 mb-1">1. 安全与密码修改</div>
-                  <div class="text-gray-500 dark:text-gray-400">系统默认账户为 <code class="px-1 py-0.5 rounded bg-gray-200 dark:bg-gray-800">admin / admin123</code>，登录后请立即前往「系统设置」修改密码。</div>
+                  <div class="text-gray-500 dark:text-gray-400">系统内置默认账户为 <code class="px-1 py-0.5 rounded bg-gray-200 dark:bg-gray-800">admin / admin</code>（Docker 部署可在启动时通过环境变量 <code class="px-1 py-0.5 rounded bg-gray-200 dark:bg-gray-800">-e PROXY_WEB_PASSWORD=xxx</code> 自定义密码；未传时首次启动会在容器日志中随机打印一次性密码）。登录后请前往「系统设置」修改密码。</div>
                 </div>
                 <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
                   <div class="font-bold text-indigo-600 dark:text-indigo-400 mb-1">2. 模组接入与识别</div>
@@ -409,6 +409,16 @@ const filteredAtCommands = computed(() => {
               <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 space-y-1.5">
                 <div class="font-bold text-indigo-600 dark:text-indigo-400">🔢 DTMF 智能按键：</div>
                 <div>在呼叫客服电话（如 10086 / 10010）时，可使用界面上的数字键盘实时发送 DTMF 双音多频信号完成语音菜单交互导航。</div>
+              </div>
+
+              <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-800 space-y-1.5">
+                <div class="font-bold text-indigo-600 dark:text-indigo-400">🎙️ 双向通话录音与在线试听/下载：</div>
+                <div>支持在通话过程中一键开启双向实时录音，采用服务端 PCM 混音与 FFmpeg 高保真压缩存储为标准 MP3 格式。通话记录列表支持一键在线播放试听与文件下载。</div>
+              </div>
+
+              <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-800 space-y-1.5">
+                <div class="font-bold text-indigo-600 dark:text-indigo-400">⚡ 高清低延迟 WebRTC 媒体直连：</div>
+                <div>底层通过 ALSA 硬件驱动与 Pion WebRTC 管道直连，内置局域网与物理网卡动态自适应过滤，支持快速挂断重拨无缝切换，以及浏览器后台标签页静默保活。</div>
               </div>
 
               <div class="p-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5 space-y-1.5">

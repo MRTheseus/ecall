@@ -213,20 +213,6 @@ export function useVoiceCall() {
         position: 'top-right'
       })
     } else if (event.type === 'hangup' || (event.session && event.session.state === 'terminated')) {
-      // 幂等保护：如果已经在处理挂断（resetTimer 已设），或 localStream 已经释放，不重复处理
-      if (!localStream.value && !peerConnection.value) {
-        // 已经清理过了，只需确保 session 状态正确
-        if (resetTimer === null) {
-          resetTimer = setTimeout(() => {
-            if (currentSession.value && currentSession.value.state === 'terminated') {
-              currentSession.value = null
-            }
-            resetTimer = null
-          }, 1500)
-        }
-        return
-      }
-
       releaseMedia()
       let tip = '通话已结束'
       if (event.session?.hangup_reason === 'remote_canceled') {
@@ -240,14 +226,12 @@ export function useVoiceCall() {
       }
       ElMessage.info(tip)
 
-      // 1.5 秒后自动清空通话会话，恢复待机拨号键盘
+      // 1 秒后自动清空通话会话，恢复待机拨号键盘 (防止早退导致状态残留)
       clearTimeout(resetTimer)
       resetTimer = setTimeout(() => {
-        if (currentSession.value && currentSession.value.state === 'terminated') {
-          currentSession.value = null
-        }
+        currentSession.value = null
         resetTimer = null
-      }, 1500)
+      }, 1000)
     } else if (event.type === 'connected') {
       // 呼叫首次接通 (仅由 CLCC 接通事件触发一次)
       startWebRTC()
@@ -346,6 +330,13 @@ export function useVoiceCall() {
         if (state === 'failed') {
           console.warn('PeerConnection 彻底失败，释放媒体资源')
           releaseMedia()
+          // 关键修复：连接彻底失败时强制复位当前会话，坚决防止拨号盘锁死
+          clearTimeout(resetTimer)
+          resetTimer = setTimeout(() => {
+            currentSession.value = null
+            resetTimer = null
+          }, 500)
+          ElMessage.error('语音媒体流连接失败，已自动复位')
         }
       }
 

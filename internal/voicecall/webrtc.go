@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"sync"
 	"time"
@@ -46,7 +47,12 @@ func NewWebRTCGateway(bridge *AudioBridge, recorder *CallRecorder) *WebRTCGatewa
 // HandleOffer 处理前端发来的 SDP Offer 并生成 SDP Answer
 func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (string, error) {
 	gw.mu.Lock()
-	defer gw.mu.Unlock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			gw.mu.Unlock()
+		}
+	}()
 
 	// 1. 如果已有旧连接，先清理
 	if gw.cancel != nil {
@@ -66,14 +72,32 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 	}
 
 	settingEngine := webrtc.SettingEngine{}
-	settingEngine.SetIncludeLoopbackCandidate(true)
+	settingEngine.SetIncludeLoopbackCandidate(false) // 禁用 loopback，避免无效候选
+	// 动态网卡 IP 过滤器：自动剔除虚拟网卡干扰，保留任意宿主机物理网卡与公网 IP (0 硬编码)
+	settingEngine.SetIPFilter(func(ip net.IP) bool {
+		if ip.IsLoopback() {
+			return false
+		}
+		ipv4 := ip.To4()
+		if ipv4 != nil {
+			// 过滤 Tailscale CGNAT 虚拟保留段 (100.64.0.0/10: 100.64.0.0 ~ 100.127.255.255)
+			if ipv4[0] == 100 && (ipv4[1]&0xc0) == 64 {
+				return false
+			}
+			// 过滤 Docker 默认容器网桥段 (172.17.0.0/16)
+			if ipv4[0] == 172 && ipv4[1] == 17 {
+				return false
+			}
+		}
+		return true
+	})
 
 	api := webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithSettingEngine(settingEngine),
 	)
 
-	// 3. 创建 PeerConnection (仅使用国内高速低延迟 STUN 节点，避免因 Google STUN 超时导致 1.5s 阻塞)
+	// 3. 创建 PeerConnection (配置低延迟 STUN 节点)
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
@@ -151,10 +175,18 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 		return "", fmt.Errorf("set local description: %w", err)
 	}
 
-	// 等待 ICE 候选收集（或超时）
+	// 启动转码进程
+	gw.startTranscoders()
+	go gw.startOutgoingAudioStream()
+
+	// 此时连接和转码器已就绪，提前释放锁，允许前端并发 candidate 毫秒级写入，消除阻塞
+	unlocked = true
+	gw.mu.Unlock()
+
+	// 锁外等待 ICE 候选收集完成或超时 (最多 800ms，加速协商)
 	select {
 	case <-gatherComplete:
-	case <-time.After(1500 * time.Millisecond):
+	case <-time.After(800 * time.Millisecond):
 		logger.Debug("ICE 收集等待超时，返回现有 Answer")
 	case <-gw.ctx.Done():
 		return "", gw.ctx.Err()
@@ -164,10 +196,6 @@ func (gw *WebRTCGateway) HandleOffer(ctx context.Context, offerSDP string) (stri
 	if currentAnswer == nil {
 		currentAnswer = &answer
 	}
-
-	// 10. 启动 ffmpeg 转码管道与下行推流协程
-	gw.startTranscoders()
-	go gw.startOutgoingAudioStream()
 
 	return currentAnswer.SDP, nil
 }
@@ -429,6 +457,11 @@ func (gw *WebRTCGateway) startOutgoingAudioStream() {
 				continue
 			}
 			if len(pageData) == 0 {
+				continue
+			}
+
+			// 跳过 Ogg 第二个 Page 的 OpusTags 元数据头（非音频帧，避免客户端 WebRTC 解码器报错）
+			if len(pageData) >= 8 && string(pageData[:8]) == "OpusTags" {
 				continue
 			}
 
