@@ -71,17 +71,18 @@ if [ "$need_alsaucm" = "1" ] || [ ! -e /run/alsaucm_test ]; then
     sleep 0.5
 fi
 
-# 4. 执行 ACDB VoLTE 校准与路由
-if ! grep -q 'ACDB -> Sent VocProc Cal!' /run/djonehub-alsaucm.log 2>/dev/null || [ "$FORCE_RESET" = "1" ]; then
-    if [ -e /run/alsaucm_test ]; then
-        (
-            printf 'open snd_soc_msm_9x07_Tomtom_I2S\n'
-            printf 'set _verb VoLTE\n'
-            printf 'set _enadev Auxpcm Rx\n'
-            printf 'set _enadev Auxpcm Tx\n'
-        ) > /run/alsaucm_test 2>/dev/null || true
-        sleep 0.5
-    fi
+# 4. 执行 ACDB VoLTE 校准与路由（每次呼叫必须无条件重新执行，重新挂载基带 VoLTE / Auxpcm 路由）
+if [ -e /run/alsaucm_test ]; then
+    # 截断旧日志，避免历史数据干扰
+    : > /run/djonehub-alsaucm.log 2>/dev/null || true
+
+    (
+        printf 'open snd_soc_msm_9x07_Tomtom_I2S\n'
+        printf 'set _verb VoLTE\n'
+        printf 'set _enadev Auxpcm Rx\n'
+        printf 'set _enadev Auxpcm Tx\n'
+    ) > /run/alsaucm_test 2>/dev/null || true
+    sleep 0.3
 fi
 
 # 5. 确保 6 项高通核心 QDSP6 混音器开关全部保持开启

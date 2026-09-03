@@ -91,7 +91,7 @@ func GetCallRecords(deviceID string, limit int, offset int) ([]CallRecord, int64
 		return nil, 0, err
 	}
 
-	err := query.Order("started_at DESC").Limit(limit).Offset(offset).Find(&records).Error
+	err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&records).Error
 	return records, total, err
 }
 

@@ -258,7 +258,15 @@ async function fetchCallRecords() {
   loadingRecords.value = true
   try {
     const res = await api.get('/voice/records', { params: { limit: 50 } })
-    callRecords.value = res.data?.records || []
+    const list = res.data?.records || []
+    // 双重排序保障：按解析后的真实物理时间戳倒序，相同时按 id 倒序
+    list.sort((a: any, b: any) => {
+      const tb = new Date(b.started_at).getTime() || 0
+      const ta = new Date(a.started_at).getTime() || 0
+      if (tb !== ta) return tb - ta
+      return (b.id || 0) - (a.id || 0)
+    })
+    callRecords.value = list
   } catch (e) {
     console.error('获取通话记录失败', e)
   } finally {
