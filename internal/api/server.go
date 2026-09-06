@@ -351,6 +351,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.GET("/sms/thread", s.handleGetSMSThread)              // 获取与某联系人的短信会话
 		api.DELETE("/sms/messages/:id", s.handleDeleteSMSMessage) // 删除单条历史短信
 		api.DELETE("/sms/thread", s.handleDeleteSMSThread)        // 删除指定历史短信会话
+		api.POST("/sms/read", s.handleMarkSMSRead)                // 标记短信会话为已读
 
 		// ===== 语音呼叫 & WebRTC =====
 		api.GET("/voice/status", s.handleVoiceStatus)
@@ -1535,7 +1536,46 @@ func (s *Server) handleGetSMSThread(c *gin.Context) {
 		})
 	}
 
+	// 当读取最新会话记录时，自动标记该会话未读短信为已读并清零联系人未读数
+	if beforeTs == nil && beforeID == 0 {
+		_ = db.MarkSMSThreadRead(iccid, peer)
+	}
+
 	c.JSON(http.StatusOK, enriched)
+}
+
+func (s *Server) handleMarkSMSRead(c *gin.Context) {
+	var req struct {
+		Peer     string `json:"peer"`
+		DeviceID string `json:"device_id"`
+		IMSI     string `json:"imsi"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "参数错误"})
+		return
+	}
+	peer := strings.TrimSpace(req.Peer)
+	if peer == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "缺少 peer 参数"})
+		return
+	}
+
+	var iccid string
+	if strings.TrimSpace(req.DeviceID) != "" || strings.TrimSpace(req.IMSI) != "" {
+		resolved, status, msg := s.resolveSMSICCID(req.DeviceID, req.IMSI)
+		if status != 0 {
+			c.JSON(status, gin.H{"status": "error", "message": msg})
+			return
+		}
+		iccid = resolved
+	}
+
+	if err := db.MarkSMSThreadRead(iccid, peer); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "标记已读失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "已标记为已读"})
 }
 
 func (s *Server) handleDeleteSMSMessage(c *gin.Context) {

@@ -6,7 +6,7 @@ import { Loading } from '@element-plus/icons-vue'
 import { useSMSStore } from '../stores/sms'
 import { usePollingScheduler } from '../composables/usePollingScheduler'
 import { toAppError } from '../services/http'
-import type { SmsThreadQueryParams } from '../services/sms'
+import { smsService, type SmsThreadQueryParams } from '../services/sms'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ErrorState from '../components/ErrorState.vue'
@@ -27,6 +27,7 @@ type SmsThread = {
   lastMessage: string
   lastDeviceName?: string
   localPhone?: string
+  unreadCount?: number
   peerLower: string
   lastMessageLower: string
 }
@@ -63,7 +64,14 @@ function parseTs(s: string) {
 }
 
 function formatClock(ms: number) {
-  return ms ? new Date(ms).toLocaleTimeString() : ''
+  if (!ms) return ''
+  const d = new Date(ms)
+  if (!Number.isFinite(d.getTime())) return ''
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hours}:${minutes}`
 }
 
 function dateKey(ms: number) {
@@ -215,10 +223,19 @@ function buildSmsQuery(device: string, contact?: string) {
 
 function markThreadSeen(t: SmsThread | null) {
   if (!t) return
+  t.unreadCount = 0
   setLastSeen(t.key, t.lastTs)
+  smsService.markRead({
+    peer: t.peer,
+    device_id: selectedDevice.value === 'all' ? undefined : selectedDevice.value,
+    imsi: t.imsi
+  }).catch(() => {})
 }
 
 function isUnread(t: SmsThread) {
+  if (typeof t.unreadCount === 'number') {
+    return t.unreadCount > 0
+  }
   return t.lastTs > getLastSeen(t.key)
 }
 
@@ -762,17 +779,18 @@ async function confirmDeleteThread(thread: SmsThread) {
 
 <template>
   <div ref="smsPageRef" class="sms-page h-[calc(100vh-140px)] flex flex-col">
-    <PageHeader title="短信中心" subtitle="按联系人聚合，点击进入会话明细">
-      <template #actions>
-        <div class="flex items-center gap-2">
-          <RefreshButton :loading="loading" @click="refreshAll" />
-          <el-button type="primary" @click="openSendModal" class="font-bold !border-0">
-            <el-icon><Send24Regular /></el-icon>
-            新建短信
-          </el-button>
-        </div>
-      </template>
-    </PageHeader>
+    <div class="flex flex-row items-center justify-between gap-2 mb-4 sm:mb-6">
+      <h2 class="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400">
+        短信中心
+      </h2>
+      <div class="flex items-center gap-2">
+        <RefreshButton :loading="loading" @click="refreshAll" />
+        <el-button type="primary" @click="openSendModal" class="font-bold !border-0">
+          <el-icon><Send24Regular /></el-icon>
+          新建短信
+        </el-button>
+      </div>
+    </div>
 
     <ErrorState
       v-if="devicesError"
@@ -908,7 +926,16 @@ async function confirmDeleteThread(thread: SmsThread) {
           <div class="p-4 border-b border-gray-100 dark:border-white/10 flex items-center justify-between gap-3">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <el-button v-if="isNarrowLayout && selectedThreadKey" text @click="backToList">返回</el-button>
+                <el-button
+                  v-if="isNarrowLayout && selectedThreadKey"
+                  size="small"
+                  type="info"
+                  plain
+                  class="!rounded-lg !px-3 !py-1 font-semibold shadow-sm"
+                  @click="backToList"
+                >
+                  返回
+                </el-button>
                 <div class="text-sm font-extrabold text-gray-900 dark:text-white truncate">
                   {{ selectedThread?.peer || '请选择会话' }}
                 </div>
@@ -924,8 +951,15 @@ async function confirmDeleteThread(thread: SmsThread) {
               </div>
             </div>
             <div v-if="selectedThread" class="flex items-center gap-2">
-
-              <el-button text @click="scrollThreadToBottom">最新</el-button>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                class="!rounded-lg !px-3 !py-1 font-semibold shadow-sm"
+                @click="scrollThreadToBottom"
+              >
+                最新
+              </el-button>
             </div>
           </div>
 

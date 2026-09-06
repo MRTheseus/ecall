@@ -42,6 +42,7 @@ function normalizeThread(contact: SMSContactDTO): SmsThreadVM {
     lastMessage: String(contact.last_content || '').slice(0, 80),
     lastDeviceName: contact.device_name,
     localPhone: contact.local_phone || '',
+    unreadCount: Number(contact.unread_count || 0),
     peerLower: String(contact.peer || '').toLowerCase(),
     lastMessageLower: String(contact.last_content || '').toLowerCase()
   }
@@ -108,6 +109,12 @@ export const smsService = {
       if (payload.imsi) params.imsi = payload.imsi
       const res = await api.delete('/sms/thread', { params })
       return res.data as { deleted: number; imsi: string; peer: string }
+    })
+  },
+  markRead(payload: { peer: string; device_id?: string; imsi?: string }) {
+    return callService(async () => {
+      const res = await api.post('/sms/read', payload)
+      return res.data
     })
   }
 }

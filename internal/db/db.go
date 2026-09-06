@@ -1124,3 +1124,32 @@ func CurrentICCIDForDevice(deviceID string) string {
 	}
 	return ""
 }
+
+// MarkSMSThreadRead 将指定联系人会话的未读短信标记为已读，并清零该会话未读数
+func MarkSMSThreadRead(iccid, peer string) error {
+	if DB == nil {
+		return nil
+	}
+	peer = strings.TrimSpace(peer)
+	if peer == "" {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 将接收且未读的短信状态改为 1 (已读)
+		qSMS := tx.Model(&SMS{}).Where("peer = ? AND type = ? AND status = ?", peer, 1, 0)
+		if iccid != "" {
+			qSMS = qSMS.Where("iccid = ?", iccid)
+		}
+		if err := qSMS.Update("status", 1).Error; err != nil {
+			return err
+		}
+
+		// 2. 将联系人会话的未读数清零
+		qContact := tx.Model(&SMSContact{}).Where("peer = ?", peer)
+		if iccid != "" {
+			qContact = qContact.Where("iccid = ?", iccid)
+		}
+		return qContact.Update("unread_count", 0).Error
+	})
+}
+
