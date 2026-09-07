@@ -29,6 +29,40 @@ const localStream = shallowRef<MediaStream | null>(null)
 const peerConnection = shallowRef<RTCPeerConnection | null>(null)
 const audioElement = shallowRef<HTMLAudioElement | null>(null)
 
+// 未接来电未查看计数 (全局响应式)
+const unreadMissedCalls = ref<number>(0)
+
+async function fetchUnreadMissedCalls() {
+  try {
+    const res = await fetch('/api/voice/unread-missed-count', {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`
+      }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      unreadMissedCalls.value = Number(data?.unread_count || 0)
+    }
+  } catch (e) {
+    // 忽略未登录或网络临时错误
+  }
+}
+
+async function markMissedCallsRead() {
+  if (unreadMissedCalls.value <= 0) return
+  unreadMissedCalls.value = 0
+  try {
+    await fetch('/api/voice/missed-calls/read', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`
+      }
+    })
+  } catch (e) {
+    // ignore
+  }
+}
+
 let ws: WebSocket | null = null
 let heartbeatTimer: any = null
 let durationTimer: any = null
@@ -179,6 +213,7 @@ export function useVoiceCall() {
             ws.send(JSON.stringify({ type: 'ping' }))
           }
         }, 20000)
+        fetchUnreadMissedCalls()
       }
 
       ws.onmessage = (ev) => {
@@ -225,6 +260,11 @@ export function useVoiceCall() {
         tip = '拨号失败'
       }
       ElMessage.info(tip)
+
+      // 若为未接听来电（呼入且未曾接通），立即刷新未接电话角标
+      if (event.session?.direction === 'inbound' && !event.session?.connected_at) {
+        fetchUnreadMissedCalls()
+      }
 
       // 1 秒后自动清空通话会话，恢复待机拨号键盘 (防止早退导致状态残留)
       clearTimeout(resetTimer)
@@ -585,6 +625,9 @@ export function useVoiceCall() {
     toggleRecording,
     sendDTMF,
     toggleMute,
-    connectWebSocket
+    connectWebSocket,
+    unreadMissedCalls,
+    fetchUnreadMissedCalls,
+    markMissedCallsRead
   }
 }

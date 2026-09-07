@@ -246,9 +246,37 @@ func (s *Server) handleVoiceRecords(c *gin.Context) {
 		return
 	}
 
+	// 用户查看首屏通话记录时，自动消除未接来电未读状态
+	if offset == 0 {
+		_ = db.MarkAllMissedCallsRead()
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"records": records,
 		"total":   total,
+	})
+}
+
+// handleVoiceUnreadMissedCount 获取未接来电未读总数
+func (s *Server) handleVoiceUnreadMissedCount(c *gin.Context) {
+	count, err := db.GetUnreadMissedCallsCount()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"unread_count": count,
+	})
+}
+
+// handleVoiceMarkMissedCallsRead 将所有未接来电标记为已读
+func (s *Server) handleVoiceMarkMissedCallsRead(c *gin.Context) {
+	if err := db.MarkAllMissedCallsRead(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
 	})
 }
 

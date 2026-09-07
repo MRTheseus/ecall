@@ -1153,3 +1153,14 @@ func MarkSMSThreadRead(iccid, peer string) error {
 	})
 }
 
+// GetTotalUnreadSMSCount 获取全局所有会话的未读短信总数
+func GetTotalUnreadSMSCount() (int64, error) {
+	if DB == nil {
+		return 0, nil
+	}
+	var total int64
+	err := DB.Model(&SMS{}).Where("type = ? AND status = ?", 1, 0).Count(&total).Error
+	return total, err
+}
+
+

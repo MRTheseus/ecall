@@ -14,6 +14,23 @@ export const useSMSStore = defineStore('sms', () => {
   const lastOkAt = ref<number | null>(null)
   const error = ref<AppError | null>(null)
 
+  const unreadCount = ref(0)
+
+  const totalUnreadCount = computed(() => {
+    if (threads.value.length > 0) {
+      return threads.value.reduce((acc, t) => acc + (t.unreadCount || 0), 0)
+    }
+    return unreadCount.value
+  })
+
+  async function fetchUnreadCount() {
+    const result = await smsService.getUnreadCount()
+    if (result.ok) {
+      unreadCount.value = result.data
+    }
+    return result
+  }
+
   async function fetchDevices() {
     const result = await smsService.listDevices()
     if (result.ok) devices.value = result.data
@@ -24,6 +41,7 @@ export const useSMSStore = defineStore('sms', () => {
     const result = await smsService.listContacts(deviceId)
     if (result.ok) {
       threads.value = result.data
+      unreadCount.value = result.data.reduce((acc, t) => acc + (t.unreadCount || 0), 0)
       lastOkAt.value = Date.now()
       error.value = null
     } else {
@@ -57,6 +75,9 @@ export const useSMSStore = defineStore('sms', () => {
     loading,
     lastOkAt,
     error,
+    unreadCount,
+    totalUnreadCount,
+    fetchUnreadCount,
     fetchDevices,
     fetchThreads,
     fetchThread,

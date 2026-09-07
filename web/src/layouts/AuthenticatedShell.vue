@@ -20,6 +20,8 @@ import {
   QuestionCircle24Regular
 } from '@vicons/fluent'
 import IncomingCallModal from '../components/IncomingCallModal.vue'
+import { useSMSStore } from '../stores/sms'
+import { useVoiceCall } from '../composables/useVoiceCall'
 
 defineProps({
   isDark: {
@@ -33,12 +35,42 @@ const emit = defineEmits(['toggle-theme'])
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const smsStore = useSMSStore()
+const { unreadMissedCalls, fetchUnreadMissedCalls, markMissedCallsRead } = useVoiceCall()
 const collapsed = ref(false)
 const isMobile = ref(false)
 const drawerOpen = ref(false)
 const debugOpen = ref(false)
 const guideOpen = ref(false)
 const DebugPanel = defineAsyncComponent(() => import('../components/DebugPanel.vue'))
+
+function getMenuBadge(path: string): number {
+  if (path === '/sms') {
+    return smsStore.totalUnreadCount || 0
+  }
+  if (path === '/voice') {
+    return unreadMissedCalls.value || 0
+  }
+  return 0
+}
+
+let badgeTimer: any = null
+
+function refreshBadges() {
+  smsStore.fetchUnreadCount().catch(() => {})
+  fetchUnreadMissedCalls().catch(() => {})
+}
+
+// 路由监听：进入电话拨号页面自动清除未接电话角标
+watch(
+  () => route.path,
+  (path) => {
+    if (path === '/voice') {
+      markMissedCallsRead().catch(() => {})
+    }
+  },
+  { immediate: true }
+)
 
 const menuItems = [
   { index: '/', label: '仪表盘', shortLabel: '仪表盘', icon: Board24Regular },
@@ -94,11 +126,18 @@ onMounted(() => {
   debugOpen.value = saved === '1'
 
   window.addEventListener('keydown', onKeydown)
+
+  refreshBadges()
+  badgeTimer = setInterval(refreshBadges, 15000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', syncIsMobile)
   window.removeEventListener('keydown', onKeydown)
+  if (badgeTimer) {
+    clearInterval(badgeTimer)
+    badgeTimer = null
+  }
 })
 
 watch(
@@ -154,8 +193,26 @@ const activePath = computed(() => route.path)
         router
       >
         <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <template #title><span class="sidebar-menu-label">{{ item.label }}</span></template>
+          <div class="relative flex items-center justify-center">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span
+              v-if="collapsed && getMenuBadge(item.index) > 0"
+              class="absolute -top-1 -right-2 min-w-[15px] h-3.5 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center leading-none shadow-xs"
+            >
+              {{ getMenuBadge(item.index) > 99 ? '99+' : getMenuBadge(item.index) }}
+            </span>
+          </div>
+          <template #title>
+            <div class="w-full flex items-center justify-between pr-2">
+              <span class="sidebar-menu-label">{{ item.label }}</span>
+              <span
+                v-if="getMenuBadge(item.index) > 0"
+                class="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-500 text-white leading-none shadow-xs"
+              >
+                {{ getMenuBadge(item.index) > 99 ? '99+' : getMenuBadge(item.index) }}
+              </span>
+            </div>
+          </template>
         </el-menu-item>
       </el-menu>
 
@@ -199,7 +256,17 @@ const activePath = computed(() => route.path)
         >
           <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
             <el-icon><component :is="item.icon" /></el-icon>
-            <template #title><span class="sidebar-menu-label">{{ item.label }}</span></template>
+            <template #title>
+              <div class="w-full flex items-center justify-between pr-2">
+                <span class="sidebar-menu-label">{{ item.label }}</span>
+                <span
+                  v-if="getMenuBadge(item.index) > 0"
+                  class="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-500 text-white leading-none shadow-xs"
+                >
+                  {{ getMenuBadge(item.index) > 99 ? '99+' : getMenuBadge(item.index) }}
+                </span>
+              </div>
+            </template>
           </el-menu-item>
         </el-menu>
 
@@ -272,7 +339,7 @@ const activePath = computed(() => route.path)
         <div class="main-inner mx-auto w-full">
           <router-view v-slot="{ Component, route: r }">
             <ErrorBoundary v-if="Component" title="页面渲染失败">
-              <component :is="Component" :key="r.fullPath" />
+              <component :is="Component" :key="r.path" />
             </ErrorBoundary>
             <LoadingScreen v-else title="正在加载页面…" subtitle="正在准备页面组件与资源" />
           </router-view>
@@ -296,9 +363,17 @@ const activePath = computed(() => route.path)
             : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 active:scale-95'
         ]"
       >
-        <el-icon :size="20" class="mb-0.5">
-          <component :is="item.icon" />
-        </el-icon>
+        <div class="relative flex items-center justify-center">
+          <el-icon :size="20" class="mb-0.5">
+            <component :is="item.icon" />
+          </el-icon>
+          <span
+            v-if="getMenuBadge(item.index) > 0"
+            class="absolute -top-1.5 -right-2.5 min-w-[15px] h-3.5 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center leading-none shadow-xs"
+          >
+            {{ getMenuBadge(item.index) > 99 ? '99+' : getMenuBadge(item.index) }}
+          </span>
+        </div>
         <span class="leading-none tracking-tight">{{ item.shortLabel || item.label }}</span>
       </router-link>
     </nav>

@@ -352,6 +352,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.DELETE("/sms/messages/:id", s.handleDeleteSMSMessage) // 删除单条历史短信
 		api.DELETE("/sms/thread", s.handleDeleteSMSThread)        // 删除指定历史短信会话
 		api.POST("/sms/read", s.handleMarkSMSRead)                // 标记短信会话为已读
+		api.GET("/sms/unread-count", s.handleGetSMSUnreadCount)   // 获取未读短信总数
 
 		// ===== 语音呼叫 & WebRTC =====
 		api.GET("/voice/status", s.handleVoiceStatus)
@@ -365,6 +366,8 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/voice/webrtc/candidate", s.handleVoiceWebRTCCandidate)
 		api.GET("/voice/ws", s.handleVoiceWS)
 		api.GET("/voice/records", s.handleVoiceRecords)
+		api.GET("/voice/unread-missed-count", s.handleVoiceUnreadMissedCount) // 获取未接来电未读数
+		api.POST("/voice/missed-calls/read", s.handleVoiceMarkMissedCallsRead) // 标记未接来电全部已读
 		api.GET("/voice/records/:id/audio", s.handleVoiceRecordAudio)
 		api.GET("/voice/top-contacts", s.handleVoiceTopContacts)
 		api.DELETE("/voice/records/:id", s.handleVoiceDeleteRecord)
@@ -1576,6 +1579,15 @@ func (s *Server) handleMarkSMSRead(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "已标记为已读"})
+}
+
+func (s *Server) handleGetSMSUnreadCount(c *gin.Context) {
+	count, err := db.GetTotalUnreadSMSCount()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "获取未读短信数失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "unread_count": count})
 }
 
 func (s *Server) handleDeleteSMSMessage(c *gin.Context) {

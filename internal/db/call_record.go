@@ -22,6 +22,7 @@ type CallRecord struct {
 	StartedAt     time.Time  `gorm:"column:started_at;index:idx_call_records_started_at,sort:desc" json:"started_at"`
 	ConnectedAt   *time.Time `gorm:"column:connected_at" json:"connected_at,omitempty"`
 	EndedAt       time.Time  `gorm:"column:ended_at" json:"ended_at"`
+	IsRead        bool       `gorm:"column:is_read;default:false;index" json:"is_read"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
@@ -37,6 +38,10 @@ type TopCallContact struct {
 func SaveCallRecord(record *CallRecord) error {
 	if DB == nil {
 		return nil
+	}
+	// 外呼或已接通的通话默认标记为已查看，仅未接来电保留未读 (false)
+	if record.Direction == "outbound" || record.State == "completed" {
+		record.IsRead = true
 	}
 	return DB.Create(record).Error
 }
@@ -131,3 +136,26 @@ func ClearCallRecords() error {
 	}
 	return DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&CallRecord{}).Error
 }
+
+// GetUnreadMissedCallsCount 获取未查看的未接来电总数
+func GetUnreadMissedCallsCount() (int64, error) {
+	if DB == nil {
+		return 0, nil
+	}
+	var count int64
+	err := DB.Model(&CallRecord{}).
+		Where("direction = ? AND state IN (?, ?) AND is_read = ?", "inbound", "missed", "canceled", false).
+		Count(&count).Error
+	return count, err
+}
+
+// MarkAllMissedCallsRead 将所有未查看的未接来电标记为已读
+func MarkAllMissedCallsRead() error {
+	if DB == nil {
+		return nil
+	}
+	return DB.Model(&CallRecord{}).
+		Where("direction = ? AND is_read = ?", "inbound", false).
+		Update("is_read", true).Error
+}
+

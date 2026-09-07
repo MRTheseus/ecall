@@ -116,5 +116,11 @@ export const smsService = {
       const res = await api.post('/sms/read', payload)
       return res.data
     })
+  },
+  getUnreadCount() {
+    return callService(async () => {
+      const res = await api.get<{ unread_count: number }>('/sms/unread-count')
+      return Number(res.data?.unread_count || 0)
+    })
   }
 }
